@@ -4,10 +4,10 @@ import (
 	"context"
 	"os"
 
-	"github.com/openshift-pipelines/tektoncd-pruner/pkg/config"
 	pipelineclient "github.com/tektoncd/pipeline/pkg/client/injection/client"
 	taskruninformer "github.com/tektoncd/pipeline/pkg/client/injection/informers/pipeline/v1/taskrun"
 	taskrunreconciler "github.com/tektoncd/pipeline/pkg/client/injection/reconciler/pipeline/v1/taskrun"
+	"github.com/tektoncd/pruner/pkg/config"
 	"go.uber.org/zap"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"

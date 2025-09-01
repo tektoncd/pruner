@@ -43,10 +43,10 @@ jobs:
     - name: Check out our repo
       uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v4.1.7
       with:
-        path: ./src/github.com/openshift-pipelines/tektoncd-pruner
+        path: ./src/github.com/tektoncd/pruner
 
     - name: Create kind cluster
-      working-directory: ./src/github.com/openshift-pipelines/tektoncd-pruner
+      working-directory: ./src/github.com/tektoncd/pruner
       run: |  
         kind create cluster --config "./test/kind-cluster.yaml" --wait=60s
         while ! kubectl get nodes 
@@ -56,7 +56,7 @@ jobs:
         done
 
     - name: Install Tekton pipelines
-      working-directory: ./src/github.com/openshift-pipelines/tektoncd-pruner
+      working-directory: ./src/github.com/tektoncd/pruner
       run: |
         while ! kubectl apply --filename ${{ env.TEKTON_PIPELINES_RELEASE }}
         do
@@ -68,7 +68,7 @@ jobs:
         kubectl -n tekton-pipelines delete po -l app=tekton-pipelines-controller
 
     - name: Install all the everythings
-      working-directory: ./src/github.com/openshift-pipelines/tektoncd-pruner
+      working-directory: ./src/github.com/tektoncd/pruner
       timeout-minutes: 10
       run: |
         export KO_DOCKER_REPO=kind.local
@@ -76,7 +76,7 @@ jobs:
         sleep 10
 
     - name: Run Integration tests
-      working-directory: ./src/github.com/openshift-pipelines/tektoncd-pruner
+      working-directory: ./src/github.com/tektoncd/pruner
       run: |
         echo "Running Go e2e tests"
         set +e

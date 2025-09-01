@@ -1,4 +1,4 @@
-module github.com/openshift-pipelines/tektoncd-pruner
+module github.com/tektoncd/pruner
 
 go 1.24.0
 

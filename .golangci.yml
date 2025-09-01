@@ -28,7 +28,7 @@ linters:
               desc: use sigs.k8s.io/yaml instead, to be consistent
     errcheck:
       exclude-functions:
-        - (*github.com/openshift-pipelines/tektoncd-pruner/vendor/go.uber.org/zap.SugaredLogger).Sync
+        - (*github.com/tektoncd/pruner/vendor/go.uber.org/zap.SugaredLogger).Sync
         - flag.Set
         - os.Setenv
         - logger.Sync
