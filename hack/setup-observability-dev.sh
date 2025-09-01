@@ -7,7 +7,7 @@
 set -euo pipefail
 
 # Configuration
-: "${KO_DOCKER_REPO:=<quay.io/some-repo>}" # Replace with your own repositorys
+: "${KO_DOCKER_REPO:=quay.io/your-repo}" # Replace with your own repository
 : "${KIND_CLUSTER_NAME:=tekton-obs}"
 
 wait_for_deploy() {
