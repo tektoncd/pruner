@@ -158,9 +158,14 @@ func (ps *prunerConfigStore) WorkerCount(ctx context.Context, configMap *corev1.
 }
 
 func getFromPrunerConfigResourceLevelwithSelector(namespacesSpec map[string]NamespaceSpec, namespace, name string, selector SelectorSpec, resourceType PrunerResourceType, fieldType PrunerFieldType) (*int32, string) {
+	fieldData, identifiedBy, _ := getFromPrunerConfigResourceLevelwithSelectorAndMatch(namespacesSpec, namespace, name, selector, resourceType, fieldType)
+	return fieldData, identifiedBy
+}
+
+func getFromPrunerConfigResourceLevelwithSelectorAndMatch(namespacesSpec map[string]NamespaceSpec, namespace, name string, selector SelectorSpec, resourceType PrunerResourceType, fieldType PrunerFieldType) (*int32, string, bool) {
 	prunerResourceSpec, found := namespacesSpec[namespace]
 	if !found {
-		return nil, "identifiedBy_global"
+		return nil, "identifiedBy_global", false
 	}
 
 	var resourceSpecs []ResourceSpec
@@ -174,31 +179,42 @@ func getFromPrunerConfigResourceLevelwithSelector(namespacesSpec map[string]Name
 	}
 
 	// First, check if name is provided, and use it to match exactly
-	if name != "" && (len(selector.MatchAnnotations) == 0 || len(selector.MatchLabels) == 0) {
+	if name != "" {
 		for _, resourceSpec := range resourceSpecs {
 			if resourceSpec.Name == name {
 				// Return the field value from the matched resourceSpec
 				switch fieldType {
 				case PrunerFieldTypeTTLSecondsAfterFinished:
-					return resourceSpec.TTLSecondsAfterFinished, "identifiedBy_resource_name"
+					return resourceSpec.TTLSecondsAfterFinished, "identifiedBy_resource_name", true
 				case PrunerFieldTypeSuccessfulHistoryLimit:
-					return resourceSpec.SuccessfulHistoryLimit, "identifiedBy_resource_name"
+					if resourceSpec.SuccessfulHistoryLimit != nil {
+						return resourceSpec.SuccessfulHistoryLimit, "identifiedBy_resource_name", true
+					} else {
+						return resourceSpec.HistoryLimit, "identifiedBy_resource_name", true
+					}
 				case PrunerFieldTypeFailedHistoryLimit:
-					return resourceSpec.FailedHistoryLimit, "identifiedBy_resource_name"
+					if resourceSpec.FailedHistoryLimit != nil {
+						return resourceSpec.FailedHistoryLimit, "identifiedBy_resource_name", true
+					} else {
+						return resourceSpec.HistoryLimit, "identifiedBy_resource_name", true
+					}
 				}
 			}
 		}
-	} else if len(selector.MatchAnnotations) > 0 || len(selector.MatchLabels) > 0 {
+	}
+
+	// If name-based matching didn't find a match, try selector-based matching
+	if len(selector.MatchAnnotations) > 0 || len(selector.MatchLabels) > 0 {
 		// If name is not provided, we proceed with selector matching
 
 		for _, resourceSpec := range resourceSpecs {
-			// Check if the resourceSpec matches the provided selector by annotations or labels
+			// Check if the resourceSpec's selector matches the provided resource annotations/labels
 			for _, selectorSpec := range resourceSpec.Selector {
-				// Match by annotations if provided in the selector
-				if len(selector.MatchAnnotations) > 0 {
+				// Match by annotations if the resourceSpec has annotation selectors
+				if len(selectorSpec.MatchAnnotations) > 0 {
 					match := true
-					for key, value := range selector.MatchAnnotations {
-						if resourceAnnotationValue, exists := selectorSpec.MatchAnnotations[key]; !exists || resourceAnnotationValue != value {
+					for key, value := range selectorSpec.MatchAnnotations {
+						if resourceAnnotationValue, exists := selector.MatchAnnotations[key]; !exists || resourceAnnotationValue != value {
 							match = false
 							break
 						}
@@ -207,27 +223,27 @@ func getFromPrunerConfigResourceLevelwithSelector(namespacesSpec map[string]Name
 						// Return the field value if annotations match
 						switch fieldType {
 						case PrunerFieldTypeTTLSecondsAfterFinished:
-							return resourceSpec.TTLSecondsAfterFinished, "identifiedBy_resource_ann"
+							return resourceSpec.TTLSecondsAfterFinished, "identifiedBy_resource_ann", true
 						case PrunerFieldTypeSuccessfulHistoryLimit:
 							if resourceSpec.SuccessfulHistoryLimit != nil {
-								return resourceSpec.SuccessfulHistoryLimit, "identifiedBy_resource_ann"
+								return resourceSpec.SuccessfulHistoryLimit, "identifiedBy_resource_ann", true
 							} else {
-								return resourceSpec.HistoryLimit, "identifiedBy_resource_ann"
+								return resourceSpec.HistoryLimit, "identifiedBy_resource_ann", true
 							}
 						case PrunerFieldTypeFailedHistoryLimit:
-							if resourceSpec.SuccessfulHistoryLimit != nil {
-								return resourceSpec.FailedHistoryLimit, "identifiedBy_resource_ann"
+							if resourceSpec.FailedHistoryLimit != nil {
+								return resourceSpec.FailedHistoryLimit, "identifiedBy_resource_ann", true
 							} else {
-								return resourceSpec.HistoryLimit, "identifiedBy_resource_ann"
+								return resourceSpec.HistoryLimit, "identifiedBy_resource_ann", true
 							}
 						}
 					}
 				}
-				// Match by labels if provided in the selector
-				if len(selector.MatchLabels) > 0 {
+				// Match by labels if the resourceSpec has label selectors
+				if len(selectorSpec.MatchLabels) > 0 {
 					match := true
-					for key, value := range selector.MatchLabels {
-						if resourceLabelValue, exists := selectorSpec.MatchLabels[key]; !exists || resourceLabelValue != value {
+					for key, value := range selectorSpec.MatchLabels {
+						if resourceLabelValue, exists := selector.MatchLabels[key]; !exists || resourceLabelValue != value {
 							match = false
 							break
 						}
@@ -236,18 +252,18 @@ func getFromPrunerConfigResourceLevelwithSelector(namespacesSpec map[string]Name
 						// Return the field value if labels match
 						switch fieldType {
 						case PrunerFieldTypeTTLSecondsAfterFinished:
-							return resourceSpec.TTLSecondsAfterFinished, "identifiedBy_resource_label"
+							return resourceSpec.TTLSecondsAfterFinished, "identifiedBy_resource_label", true
 						case PrunerFieldTypeSuccessfulHistoryLimit:
 							if resourceSpec.SuccessfulHistoryLimit != nil {
-								return resourceSpec.SuccessfulHistoryLimit, "identifiedBy_resource_label"
+								return resourceSpec.SuccessfulHistoryLimit, "identifiedBy_resource_label", true
 							} else {
-								return resourceSpec.HistoryLimit, "identifiedBy_resource_label"
+								return resourceSpec.HistoryLimit, "identifiedBy_resource_label", true
 							}
 						case PrunerFieldTypeFailedHistoryLimit:
-							if resourceSpec.SuccessfulHistoryLimit != nil {
-								return resourceSpec.FailedHistoryLimit, "identifiedBy_resource_label"
+							if resourceSpec.FailedHistoryLimit != nil {
+								return resourceSpec.FailedHistoryLimit, "identifiedBy_resource_label", true
 							} else {
-								return resourceSpec.HistoryLimit, "identifiedBy_resource_label"
+								return resourceSpec.HistoryLimit, "identifiedBy_resource_label", true
 							}
 						}
 					}
@@ -257,7 +273,25 @@ func getFromPrunerConfigResourceLevelwithSelector(namespacesSpec map[string]Name
 	}
 
 	// If no match found, return nil
-	return nil, ""
+	return nil, "", false
+}
+
+// checkIfResourceMatchesAnySelector checks if a resource matches any selector in the namespace config
+func checkIfResourceMatchesAnySelector(namespacesSpec map[string]NamespaceSpec, namespace, name string, selector SelectorSpec, resourceType PrunerResourceType) bool {
+	// Check multiple field types to see if ANY selector matches, regardless of which fields it defines
+	fieldTypes := []PrunerFieldType{
+		PrunerFieldTypeTTLSecondsAfterFinished,
+		PrunerFieldTypeSuccessfulHistoryLimit,
+		PrunerFieldTypeFailedHistoryLimit,
+	}
+
+	for _, fieldType := range fieldTypes {
+		_, _, matched := getFromPrunerConfigResourceLevelwithSelectorAndMatch(namespacesSpec, namespace, name, selector, resourceType, fieldType)
+		if matched {
+			return true
+		}
+	}
+	return false
 }
 
 func getResourceFieldData(globalSpec GlobalConfig, namespace, name string, selector SelectorSpec, resourceType PrunerResourceType, fieldType PrunerFieldType, enforcedConfigLevel EnforcedConfigLevel) (*int32, string) {
@@ -266,12 +300,22 @@ func getResourceFieldData(globalSpec GlobalConfig, namespace, name string, selec
 
 	switch enforcedConfigLevel {
 	case EnforcedConfigLevelResource:
+		// Check if the resource matches any selector
+		resourceMatchesSelector := checkIfResourceMatchesAnySelector(globalSpec.Namespaces, namespace, name, selector, resourceType)
+
 		// First try resource level
 		fieldData, identified_by = getFromPrunerConfigResourceLevelwithSelector(globalSpec.Namespaces, namespace, name, selector, resourceType, fieldType)
 		if fieldData != nil {
 			return fieldData, identified_by
 		}
-		// If no resource level config found, try namespace level
+
+		// If resource matches a selector but the specific field is not defined in that selector,
+		// don't fall back to namespace/global - return nil to indicate the field is not configured
+		if resourceMatchesSelector {
+			return nil, "identifiedBy_resource_selector_no_value"
+		}
+
+		// If no resource level config found and no selector matched, try namespace level
 		spec, found := globalSpec.Namespaces[namespace]
 		if found {
 			switch fieldType {
