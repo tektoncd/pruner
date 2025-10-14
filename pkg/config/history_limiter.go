@@ -23,6 +23,7 @@ import (
 	"math"
 	"slices"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/tektoncd/pruner/pkg/metrics"
@@ -275,14 +276,9 @@ func (hl *HistoryLimiter) doResourceCleanup(ctx context.Context, resource metav1
 			label := fmt.Sprintf("%s=%s", labelKey, resourceName)
 			resources, err = hl.resourceFn.List(ctx, resource.GetNamespace(), label)
 		case "identifiedBy_resource_ann":
-			labelSelector := ""
-			for k, v := range resourceAnnotations {
-				if labelSelector != "" {
-					labelSelector += ","
-				}
-				labelSelector += fmt.Sprintf("%s=%s", k, v)
-			}
-			resources, err = hl.resourceFn.List(ctx, resource.GetNamespace(), labelSelector)
+			// For annotation-based selectors, we cannot use label selectors
+			// Instead, list all resources and filter by annotations in memory
+			resources, err = hl.resourceFn.List(ctx, resource.GetNamespace(), "")
 		case "identifiedBy_resource_label":
 			labelSelector := ""
 			for k, v := range resourceLabels {
@@ -302,6 +298,29 @@ func (hl *HistoryLimiter) doResourceCleanup(ctx context.Context, resource metav1
 
 	if err != nil {
 		return err
+	}
+
+	// For annotation-based selectors, filter resources by annotations
+	if enforcedConfigLevel == EnforcedConfigLevelResource && identifiedBy == "identifiedBy_resource_ann" {
+		annotationFiltered := []metav1.Object{}
+		for _, res := range resources {
+			resAnnotations := res.GetAnnotations()
+			match := true
+			for k, v := range resourceAnnotations {
+				// Skip pruner internal annotations
+				if strings.HasPrefix(k, "pruner.tekton.dev/") {
+					continue
+				}
+				if resAnnotations == nil || resAnnotations[k] != v {
+					match = false
+					break
+				}
+			}
+			if match {
+				annotationFiltered = append(annotationFiltered, res)
+			}
+		}
+		resources = annotationFiltered
 	}
 
 	// Filter resources by status (success/failed)
