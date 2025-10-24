@@ -18,6 +18,7 @@ package config
 
 import (
 	"context"
+	"strconv"
 	"sync"
 
 	corev1 "k8s.io/api/core/v1"
@@ -146,7 +147,7 @@ func (ps *prunerConfigStore) WorkerCount(ctx context.Context, configMap *corev1.
 	logger.Debugw("get worker count to concurrently cleanup namesapces", "nsCleanupConcurrentWorkerCount", configMap.Data["WorkerCountForNamespaceCleanup"])
 
 	if configMap.Data != nil && configMap.Data["WorkerCountForNamespaceCleanup"] != "" {
-		count, err = GetEnvValueAsInt("WorkerCountForNamespaceCleanup", DefaultWorkerCountForNamespaceCleanup)
+		count, err = strconv.Atoi(configMap.Data["WorkerCountForNamespaceCleanup"])
 		if err != nil {
 			return 0, err
 		}
