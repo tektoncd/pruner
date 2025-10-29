@@ -18,6 +18,7 @@ package config
 
 import (
 	"context"
+	"fmt"
 	"sync"
 
 	corev1 "k8s.io/api/core/v1"
@@ -598,4 +599,79 @@ func (ps *prunerConfigStore) GetTaskFailedHistoryLimitCount(namespace, name stri
 	defer ps.mutex.Unlock()
 	enforcedConfigLevel := ps.GetTaskEnforcedConfigLevel(namespace, name, selector)
 	return getResourceFieldData(ps.globalConfig, ps.namespaceConfig, namespace, name, selector, PrunerResourceTypeTaskRun, PrunerFieldTypeFailedHistoryLimit, enforcedConfigLevel)
+}
+
+func ValidateConfigMap(cm *corev1.ConfigMap) error {
+	if cm.Data == nil {
+		return nil
+	}
+
+	// Validate global config
+	if cm.Data[PrunerGlobalConfigKey] != "" {
+		globalConfig := &GlobalConfig{}
+		if err := yaml.Unmarshal([]byte(cm.Data[PrunerGlobalConfigKey]), globalConfig); err != nil {
+			return err
+		}
+		if err := validatePrunerConfig(&globalConfig.PrunerConfig, "global-config"); err != nil {
+			return err
+		}
+		// Validate nested namespace configs
+		for ns, nsSpec := range globalConfig.Namespaces {
+			if err := validatePrunerConfig(&nsSpec.PrunerConfig, "global-config.namespaces."+ns); err != nil {
+				return err
+			}
+		}
+	}
+
+	// Validate namespace config if present
+	if cm.Data[PrunerNamespaceConfigKey] != "" {
+		namespaceConfig := &NamespaceSpec{}
+		if err := yaml.Unmarshal([]byte(cm.Data[PrunerNamespaceConfigKey]), namespaceConfig); err != nil {
+			return err
+		}
+		if err := validatePrunerConfig(&namespaceConfig.PrunerConfig, "namespace-config"); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// validatePrunerConfig validates the fields of a PrunerConfig
+func validatePrunerConfig(config *PrunerConfig, path string) error {
+	if config == nil {
+		return nil
+	}
+
+	// Validate EnforcedConfigLevel
+	if config.EnforcedConfigLevel != nil {
+		level := *config.EnforcedConfigLevel
+		if level != EnforcedConfigLevelGlobal &&
+			level != EnforcedConfigLevelNamespace &&
+			level != EnforcedConfigLevelResource {
+			return fmt.Errorf("%s: invalid enforcedConfigLevel '%s', must be one of: global, namespace, resource", path, level)
+		}
+	}
+
+	// Validate TTLSecondsAfterFinished
+	if config.TTLSecondsAfterFinished != nil && *config.TTLSecondsAfterFinished < 0 {
+		return fmt.Errorf("%s: ttlSecondsAfterFinished cannot be negative, got %d", path, *config.TTLSecondsAfterFinished)
+	}
+
+	// Validate SuccessfulHistoryLimit
+	if config.SuccessfulHistoryLimit != nil && *config.SuccessfulHistoryLimit < 0 {
+		return fmt.Errorf("%s: successfulHistoryLimit cannot be negative, got %d", path, *config.SuccessfulHistoryLimit)
+	}
+
+	// Validate FailedHistoryLimit
+	if config.FailedHistoryLimit != nil && *config.FailedHistoryLimit < 0 {
+		return fmt.Errorf("%s: failedHistoryLimit cannot be negative, got %d", path, *config.FailedHistoryLimit)
+	}
+
+	// Validate HistoryLimit
+	if config.HistoryLimit != nil && *config.HistoryLimit < 0 {
+		return fmt.Errorf("%s: historyLimit cannot be negative, got %d", path, *config.HistoryLimit)
+	}
+
+	return nil
 }
