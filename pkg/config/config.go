@@ -687,6 +687,12 @@ func validatePrunerConfig(config *PrunerConfig, path string, globalConfig *Prune
 				return fmt.Errorf("%s: ttlSecondsAfterFinished (%d) cannot exceed global limit (%d)",
 					path, *config.TTLSecondsAfterFinished, *globalConfig.TTLSecondsAfterFinished)
 			}
+		} else if globalConfig == nil || globalConfig.TTLSecondsAfterFinished == nil {
+			// If no global limit is set, enforce system maximum
+			if *config.TTLSecondsAfterFinished > MaxTTLSecondsAfterFinished {
+				return fmt.Errorf("%s: ttlSecondsAfterFinished (%d) cannot exceed system maximum (%d seconds / 30 days)",
+					path, *config.TTLSecondsAfterFinished, MaxTTLSecondsAfterFinished)
+			}
 		}
 	}
 
@@ -700,6 +706,12 @@ func validatePrunerConfig(config *PrunerConfig, path string, globalConfig *Prune
 			if *config.SuccessfulHistoryLimit > *globalConfig.SuccessfulHistoryLimit {
 				return fmt.Errorf("%s: successfulHistoryLimit (%d) cannot exceed global limit (%d)",
 					path, *config.SuccessfulHistoryLimit, *globalConfig.SuccessfulHistoryLimit)
+			}
+		} else if globalConfig == nil || globalConfig.SuccessfulHistoryLimit == nil {
+			// If no global limit is set, enforce system maximum
+			if *config.SuccessfulHistoryLimit > MaxHistoryLimit {
+				return fmt.Errorf("%s: successfulHistoryLimit (%d) cannot exceed system maximum (%d)",
+					path, *config.SuccessfulHistoryLimit, MaxHistoryLimit)
 			}
 		}
 	}
@@ -715,6 +727,12 @@ func validatePrunerConfig(config *PrunerConfig, path string, globalConfig *Prune
 				return fmt.Errorf("%s: failedHistoryLimit (%d) cannot exceed global limit (%d)",
 					path, *config.FailedHistoryLimit, *globalConfig.FailedHistoryLimit)
 			}
+		} else if globalConfig == nil || globalConfig.FailedHistoryLimit == nil {
+			// If no global limit is set, enforce system maximum
+			if *config.FailedHistoryLimit > MaxHistoryLimit {
+				return fmt.Errorf("%s: failedHistoryLimit (%d) cannot exceed system maximum (%d)",
+					path, *config.FailedHistoryLimit, MaxHistoryLimit)
+			}
 		}
 	}
 
@@ -728,6 +746,12 @@ func validatePrunerConfig(config *PrunerConfig, path string, globalConfig *Prune
 			if *config.HistoryLimit > *globalConfig.HistoryLimit {
 				return fmt.Errorf("%s: historyLimit (%d) cannot exceed global limit (%d)",
 					path, *config.HistoryLimit, *globalConfig.HistoryLimit)
+			}
+		} else if globalConfig == nil || globalConfig.HistoryLimit == nil {
+			// If no global limit is set, enforce system maximum
+			if *config.HistoryLimit > MaxHistoryLimit {
+				return fmt.Errorf("%s: historyLimit (%d) cannot exceed system maximum (%d)",
+					path, *config.HistoryLimit, MaxHistoryLimit)
 			}
 		}
 	}

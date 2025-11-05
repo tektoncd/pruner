@@ -409,6 +409,113 @@ func TestValidateConfigMap_Admit_InvalidJSON(t *testing.T) {
 	}
 }
 
+func TestValidateConfigMap_Admit_SystemMaximumEnforcement(t *testing.T) {
+	tests := []struct {
+		name        string
+		configData  string
+		configType  string
+		wantAllowed bool
+		wantMessage string
+	}{
+		{
+			name:        "global config exceeds system maximum TTL",
+			configType:  "global",
+			configData:  `ttlSecondsAfterFinished: 2592001`,
+			wantAllowed: false,
+			wantMessage: "cannot exceed system maximum (2592000 seconds / 30 days)",
+		},
+		{
+			name:        "global config at system maximum TTL",
+			configType:  "global",
+			configData:  `ttlSecondsAfterFinished: 2592000`,
+			wantAllowed: true,
+		},
+		{
+			name:        "global config exceeds system maximum successfulHistoryLimit",
+			configType:  "global",
+			configData:  `successfulHistoryLimit: 101`,
+			wantAllowed: false,
+			wantMessage: "cannot exceed system maximum (100)",
+		},
+		{
+			name:        "global config at system maximum successfulHistoryLimit",
+			configType:  "global",
+			configData:  `successfulHistoryLimit: 100`,
+			wantAllowed: true,
+		},
+		{
+			name:        "namespace config exceeds system maximum without global",
+			configType:  "namespace",
+			configData:  `ttlSecondsAfterFinished: 3000000`,
+			wantAllowed: false,
+			wantMessage: "cannot exceed system maximum",
+		},
+		{
+			name:        "namespace config within system maximum",
+			configType:  "namespace",
+			configData:  `ttlSecondsAfterFinished: 2592000`,
+			wantAllowed: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var cm *corev1.ConfigMap
+			if tt.configType == "global" {
+				cm = &corev1.ConfigMap{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      config.PrunerConfigMapName,
+						Namespace: system.Namespace(),
+						Labels: map[string]string{
+							"app.kubernetes.io/part-of":     "tekton-pruner",
+							"pruner.tekton.dev/config-type": "global",
+						},
+					},
+					Data: map[string]string{
+						config.PrunerGlobalConfigKey: tt.configData,
+					},
+				}
+			} else {
+				cm = &corev1.ConfigMap{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      config.PrunerNamespaceConfigMapName,
+						Namespace: "test-namespace",
+						Labels: map[string]string{
+							"app.kubernetes.io/part-of":     "tekton-pruner",
+							"pruner.tekton.dev/config-type": "namespace",
+						},
+					},
+					Data: map[string]string{
+						config.PrunerNamespaceConfigKey: tt.configData,
+					},
+				}
+			}
+
+			req := makeAdmissionRequest(t, cm, admissionv1.Create)
+			ctx := logtesting.TestContextWithLogger(t)
+
+			client := fake.NewSimpleClientset()
+			validator := &ValidateConfigMap{
+				Client:      client,
+				SecretName:  "test-secret",
+				WebhookName: "test-webhook",
+			}
+
+			resp := validator.Admit(ctx, req)
+
+			if resp.Allowed != tt.wantAllowed {
+				t.Errorf("Admit() allowed = %v, want %v", resp.Allowed, tt.wantAllowed)
+			}
+
+			if !tt.wantAllowed && resp.Result != nil && tt.wantMessage != "" {
+				if !contains(resp.Result.Message, tt.wantMessage) {
+					t.Errorf("Admit() error message = %v, want to contain %v", resp.Result.Message, tt.wantMessage)
+				}
+			}
+		})
+	}
+}
+
 func TestValidateConfigMap_Path(t *testing.T) {
 	validator := &ValidateConfigMap{
 		Client:      fake.NewSimpleClientset(),

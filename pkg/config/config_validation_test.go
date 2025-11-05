@@ -524,3 +524,227 @@ func TestValidateConfigMapWithGlobal_InvalidGlobalConfig(t *testing.T) {
 		t.Errorf("ValidateConfigMapWithGlobal() should gracefully handle invalid global config, got error = %v", err)
 	}
 }
+
+func TestValidateConfigMap_SystemMaximumEnforcement(t *testing.T) {
+	tests := []struct {
+		name       string
+		config     string
+		configType string // "global" or "namespace"
+		wantErr    bool
+		wantErrMsg string
+	}{
+		{
+			name:       "global config exceeds system maximum TTL",
+			configType: "global",
+			config:     `ttlSecondsAfterFinished: 2592001`,
+			wantErr:    true,
+			wantErrMsg: "cannot exceed system maximum (2592000 seconds / 30 days)",
+		},
+		{
+			name:       "global config at system maximum TTL",
+			configType: "global",
+			config:     `ttlSecondsAfterFinished: 2592000`,
+			wantErr:    false,
+		},
+		{
+			name:       "global config exceeds system maximum successfulHistoryLimit",
+			configType: "global",
+			config:     `successfulHistoryLimit: 101`,
+			wantErr:    true,
+			wantErrMsg: "cannot exceed system maximum (100)",
+		},
+		{
+			name:       "global config at system maximum successfulHistoryLimit",
+			configType: "global",
+			config:     `successfulHistoryLimit: 100`,
+			wantErr:    false,
+		},
+		{
+			name:       "global config exceeds system maximum failedHistoryLimit",
+			configType: "global",
+			config:     `failedHistoryLimit: 150`,
+			wantErr:    true,
+			wantErrMsg: "cannot exceed system maximum (100)",
+		},
+		{
+			name:       "global config at system maximum failedHistoryLimit",
+			configType: "global",
+			config:     `failedHistoryLimit: 100`,
+			wantErr:    false,
+		},
+		{
+			name:       "global config exceeds system maximum historyLimit",
+			configType: "global",
+			config:     `historyLimit: 200`,
+			wantErr:    true,
+			wantErrMsg: "cannot exceed system maximum (100)",
+		},
+		{
+			name:       "global config at system maximum historyLimit",
+			configType: "global",
+			config:     `historyLimit: 100`,
+			wantErr:    false,
+		},
+		{
+			name:       "namespace config exceeds system maximum TTL without global",
+			configType: "namespace",
+			config:     `ttlSecondsAfterFinished: 3000000`,
+			wantErr:    true,
+			wantErrMsg: "cannot exceed system maximum (2592000 seconds / 30 days)",
+		},
+		{
+			name:       "namespace config within system maximum TTL",
+			configType: "namespace",
+			config:     `ttlSecondsAfterFinished: 2592000`,
+			wantErr:    false,
+		},
+		{
+			name:       "namespace config exceeds system maximum successfulHistoryLimit without global",
+			configType: "namespace",
+			config:     `successfulHistoryLimit: 150`,
+			wantErr:    true,
+			wantErrMsg: "cannot exceed system maximum (100)",
+		},
+		{
+			name:       "namespace config within system maximum successfulHistoryLimit",
+			configType: "namespace",
+			config:     `successfulHistoryLimit: 50`,
+			wantErr:    false,
+		},
+		{
+			name:       "global config with multiple fields exceeding system maximum",
+			configType: "global",
+			config: `ttlSecondsAfterFinished: 3000000
+successfulHistoryLimit: 150
+failedHistoryLimit: 200`,
+			wantErr:    true,
+			wantErrMsg: "cannot exceed system maximum",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var cm *corev1.ConfigMap
+			if tt.configType == "global" {
+				cm = &corev1.ConfigMap{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "tekton-pruner-default-spec",
+						Namespace: "tekton-pipelines",
+					},
+					Data: map[string]string{
+						PrunerGlobalConfigKey: tt.config,
+					},
+				}
+			} else {
+				cm = &corev1.ConfigMap{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "tekton-pruner-namespace-spec",
+						Namespace: "my-namespace",
+					},
+					Data: map[string]string{
+						PrunerNamespaceConfigKey: tt.config,
+					},
+				}
+			}
+
+			err := ValidateConfigMap(cm)
+			if tt.wantErr {
+				if err == nil {
+					t.Errorf("ValidateConfigMap() expected error containing '%s', got nil", tt.wantErrMsg)
+					return
+				}
+				if !strings.Contains(err.Error(), tt.wantErrMsg) {
+					t.Errorf("ValidateConfigMap() error = %v, want error containing %v", err, tt.wantErrMsg)
+				}
+			} else {
+				if err != nil {
+					t.Errorf("ValidateConfigMap() unexpected error = %v", err)
+				}
+			}
+		})
+	}
+}
+
+func TestValidateConfigMapWithGlobal_GlobalOverridesSystemMaximum(t *testing.T) {
+	// When global config sets a stricter limit, it should override system maximum
+	tests := []struct {
+		name            string
+		globalConfig    string
+		namespaceConfig string
+		wantErr         bool
+		wantErrMsg      string
+	}{
+		{
+			name:            "namespace within global limit (stricter than system max)",
+			globalConfig:    `ttlSecondsAfterFinished: 1800`,
+			namespaceConfig: `ttlSecondsAfterFinished: 1800`,
+			wantErr:         false,
+		},
+		{
+			name:            "namespace exceeds global limit but within system max",
+			globalConfig:    `ttlSecondsAfterFinished: 1800`,
+			namespaceConfig: `ttlSecondsAfterFinished: 3600`,
+			wantErr:         true,
+			wantErrMsg:      "cannot exceed global limit (1800)",
+		},
+		{
+			name:            "namespace within system max when no global limit set",
+			globalConfig:    `enforcedConfigLevel: namespace`,
+			namespaceConfig: `ttlSecondsAfterFinished: 2592000`,
+			wantErr:         false,
+		},
+		{
+			name:            "namespace exceeds system max when no global limit set",
+			globalConfig:    `enforcedConfigLevel: namespace`,
+			namespaceConfig: `ttlSecondsAfterFinished: 2592001`,
+			wantErr:         true,
+			wantErrMsg:      "cannot exceed system maximum (2592000 seconds / 30 days)",
+		},
+		{
+			name:            "global limit can be stricter than system default",
+			globalConfig:    `successfulHistoryLimit: 10`,
+			namespaceConfig: `successfulHistoryLimit: 50`,
+			wantErr:         true,
+			wantErrMsg:      "cannot exceed global limit (10)",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			globalCM := &corev1.ConfigMap{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "tekton-pruner-default-spec",
+					Namespace: "tekton-pipelines",
+				},
+				Data: map[string]string{
+					PrunerGlobalConfigKey: tt.globalConfig,
+				},
+			}
+
+			namespaceCM := &corev1.ConfigMap{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "tekton-pruner-namespace-spec",
+					Namespace: "my-namespace",
+				},
+				Data: map[string]string{
+					PrunerNamespaceConfigKey: tt.namespaceConfig,
+				},
+			}
+
+			err := ValidateConfigMapWithGlobal(namespaceCM, globalCM)
+			if tt.wantErr {
+				if err == nil {
+					t.Errorf("ValidateConfigMapWithGlobal() expected error containing '%s', got nil", tt.wantErrMsg)
+					return
+				}
+				if !strings.Contains(err.Error(), tt.wantErrMsg) {
+					t.Errorf("ValidateConfigMapWithGlobal() error = %v, want error containing %v", err, tt.wantErrMsg)
+				}
+			} else {
+				if err != nil {
+					t.Errorf("ValidateConfigMapWithGlobal() unexpected error = %v", err)
+				}
+			}
+		})
+	}
+}
