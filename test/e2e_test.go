@@ -228,6 +228,10 @@ func TestPrunerE2E(t *testing.T) {
 	t.Run("TestWebhookValidation_UpdateNamespaceConfig", func(t *testing.T) {
 		testWebhookUpdateNamespaceConfig(ctx, t, kubeClient)
 	})
+
+	t.Run("TestWebhookValidation_SystemMaximumEnforcement", func(t *testing.T) {
+		testWebhookSystemMaximumEnforcement(ctx, t, kubeClient)
+	})
 }
 
 func testTTLBasedPruning(ctx context.Context, t *testing.T, kubeClient *kubernetes.Clientset, tektonClient *clientset.Clientset) {
@@ -805,6 +809,158 @@ successfulHistoryLimit: 20`
 	} else {
 		t.Logf("✓ Webhook correctly rejected namespace config update exceeding limits: %v", err)
 	}
+}
+
+func testWebhookSystemMaximumEnforcement(ctx context.Context, t *testing.T, kubeClient *kubernetes.Clientset) {
+	// First, ensure there's no global config with explicit limits
+	// Create a minimal global config without limits
+	minimalGlobalConfig := createGlobalConfigMap(prunerConfigName, prunerNamespace, `enforcedConfigLevel: namespace`)
+
+	if err := updateOrCreateConfigMap(ctx, kubeClient, minimalGlobalConfig); err != nil {
+		t.Fatalf("Failed to set up minimal global config: %v", err)
+	}
+
+	// Wait for webhook to process the global config
+	if err := waitForWebhookReady(ctx, kubeClient, 10*time.Second); err != nil {
+		t.Fatalf("Failed waiting for webhook to be ready: %v", err)
+	}
+
+	testCases := []struct {
+		name        string
+		configType  string // "global" or "namespace"
+		config      string
+		shouldFail  bool
+		description string
+	}{
+		// Global config tests
+		{
+			name:        "global config exceeds system maximum TTL",
+			configType:  "global",
+			config:      `ttlSecondsAfterFinished: 2592001`,
+			shouldFail:  true,
+			description: "TTL of 2592001 seconds exceeds system maximum of 2592000 seconds (30 days)",
+		},
+		{
+			name:        "global config at system maximum TTL",
+			configType:  "global",
+			config:      `ttlSecondsAfterFinished: 2592000`,
+			shouldFail:  false,
+			description: "TTL of 2592000 seconds is at system maximum",
+		},
+		{
+			name:        "global config exceeds system maximum successfulHistoryLimit",
+			configType:  "global",
+			config:      `successfulHistoryLimit: 101`,
+			shouldFail:  true,
+			description: "successfulHistoryLimit of 101 exceeds system maximum of 100",
+		},
+		{
+			name:        "global config at system maximum successfulHistoryLimit",
+			configType:  "global",
+			config:      `successfulHistoryLimit: 100`,
+			shouldFail:  false,
+			description: "successfulHistoryLimit of 100 is at system maximum",
+		},
+		{
+			name:        "global config exceeds system maximum failedHistoryLimit",
+			configType:  "global",
+			config:      `failedHistoryLimit: 150`,
+			shouldFail:  true,
+			description: "failedHistoryLimit of 150 exceeds system maximum of 100",
+		},
+		{
+			name:        "global config exceeds system maximum historyLimit",
+			configType:  "global",
+			config:      `historyLimit: 200`,
+			shouldFail:  true,
+			description: "historyLimit of 200 exceeds system maximum of 100",
+		},
+		// Namespace config tests (without global limits)
+		{
+			name:        "namespace config exceeds system maximum TTL without global limit",
+			configType:  "namespace",
+			config:      `ttlSecondsAfterFinished: 3000000`,
+			shouldFail:  true,
+			description: "namespace TTL of 3000000 seconds exceeds system maximum without global limit",
+		},
+		{
+			name:        "namespace config within system maximum TTL without global limit",
+			configType:  "namespace",
+			config:      `ttlSecondsAfterFinished: 2592000`,
+			shouldFail:  false,
+			description: "namespace TTL of 2592000 seconds is within system maximum",
+		},
+		{
+			name:        "namespace config exceeds system maximum successfulHistoryLimit without global limit",
+			configType:  "namespace",
+			config:      `successfulHistoryLimit: 150`,
+			shouldFail:  true,
+			description: "namespace successfulHistoryLimit of 150 exceeds system maximum without global limit",
+		},
+		{
+			name:        "namespace config within system maximum successfulHistoryLimit without global limit",
+			configType:  "namespace",
+			config:      `successfulHistoryLimit: 100`,
+			shouldFail:  false,
+			description: "namespace successfulHistoryLimit of 100 is within system maximum",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			var cm *corev1.ConfigMap
+			var isUpdate bool
+
+			if tc.configType == "global" {
+				// For global config, we update the existing one
+				cm = createGlobalConfigMap(prunerConfigName, prunerNamespace, tc.config)
+				isUpdate = true
+			} else {
+				// For namespace config, we create new ones
+				cm = createNamespaceConfigMap("tekton-pruner-namespace-spec", testNamespace, tc.config)
+				isUpdate = false
+
+				// Add cleanup
+				t.Cleanup(func() {
+					kubeClient.CoreV1().ConfigMaps(testNamespace).Delete(context.Background(),
+						cm.Name, metav1.DeleteOptions{})
+				})
+			}
+
+			t.Logf("Testing: %s", tc.description)
+
+			var err error
+			if isUpdate {
+				err = updateOrCreateConfigMap(ctx, kubeClient, cm)
+			} else {
+				_, err = kubeClient.CoreV1().ConfigMaps(cm.Namespace).Create(ctx, cm, metav1.CreateOptions{})
+			}
+
+			if tc.shouldFail {
+				if err == nil {
+					t.Errorf("Config exceeding system maximum was accepted by webhook when it should have been rejected")
+				} else {
+					t.Logf("✓ Webhook correctly rejected config exceeding system maximum: %v", err)
+				}
+			} else {
+				if err != nil && !errors.IsAlreadyExists(err) {
+					t.Errorf("Valid config within system maximum was rejected by webhook: %v", err)
+				} else {
+					t.Logf("✓ Webhook correctly accepted config within system maximum")
+				}
+			}
+		})
+	}
+
+	// Restore original global config if needed
+	t.Cleanup(func() {
+		// Reset to a reasonable global config for other tests
+		resetConfig := createGlobalConfigMap(prunerConfigName, prunerNamespace, `enforcedConfigLevel: namespace
+ttlSecondsAfterFinished: 3600
+successfulHistoryLimit: 10
+failedHistoryLimit: 10`)
+		updateOrCreateConfigMap(context.Background(), kubeClient, resetConfig)
+	})
 }
 
 // Helper functions for waiting on resource deletion
