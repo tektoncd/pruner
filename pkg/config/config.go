@@ -242,30 +242,30 @@ func getFromPrunerConfigResourceLevelwithSelector(namespacesSpec map[string]Name
 				}
 			}
 		}
-		// Name was specified but no match found - no fallback to selectors (field isolation)
-		return nil, ""
+		// Name was specified but no match found - continue to selector matching
 	}
 
-	// If name is not provided, proceed with selector matching
+	// If name-based matching didn't succeed, proceed with selector matching
 	if len(selector.MatchAnnotations) > 0 || len(selector.MatchLabels) > 0 {
 
 		for _, resourceSpec := range resourceSpecs {
 			// Check if the resourceSpec matches the provided selector by annotations AND labels
 			for _, selectorSpec := range resourceSpec.Selector {
 				// Both annotations and labels must match when both are specified (AND logic)
-				// If ResourceSpec has both, selector must also provide both
+				// The ConfigMap's selectorSpec defines the required labels/annotations to match
+				// The selector (from the PipelineRun/TaskRun) contains the actual labels/annotations
 				annotationsMatch := true
 				labelsMatch := true
 
-				// If ResourceSpec has annotations, check if selector provides matching annotations
+				// If ConfigMap's selectorSpec has matchAnnotations, check if resource has all of them
 				if len(selectorSpec.MatchAnnotations) > 0 {
 					if len(selector.MatchAnnotations) == 0 {
-						// ResourceSpec has annotations but selector doesn't - no match
+						// ConfigMap requires annotations but resource has none - no match
 						annotationsMatch = false
 					} else {
-						// Check if all selector annotations match
-						for key, value := range selector.MatchAnnotations {
-							if resourceAnnotationValue, exists := selectorSpec.MatchAnnotations[key]; !exists || resourceAnnotationValue != value {
+						// Check if all ConfigMap's required annotations exist in resource
+						for key, value := range selectorSpec.MatchAnnotations {
+							if resourceAnnotationValue, exists := selector.MatchAnnotations[key]; !exists || resourceAnnotationValue != value {
 								annotationsMatch = false
 								break
 							}
@@ -273,15 +273,15 @@ func getFromPrunerConfigResourceLevelwithSelector(namespacesSpec map[string]Name
 					}
 				}
 
-				// If ResourceSpec has labels, check if selector provides matching labels
+				// If ConfigMap's selectorSpec has matchLabels, check if resource has all of them
 				if len(selectorSpec.MatchLabels) > 0 {
 					if len(selector.MatchLabels) == 0 {
-						// ResourceSpec has labels but selector doesn't - no match
+						// ConfigMap requires labels but resource has none - no match
 						labelsMatch = false
 					} else {
-						// Check if all selector labels match
-						for key, value := range selector.MatchLabels {
-							if resourceLabelValue, exists := selectorSpec.MatchLabels[key]; !exists || resourceLabelValue != value {
+						// Check if all ConfigMap's required labels exist in resource
+						for key, value := range selectorSpec.MatchLabels {
+							if resourceLabelValue, exists := selector.MatchLabels[key]; !exists || resourceLabelValue != value {
 								labelsMatch = false
 								break
 							}
@@ -530,40 +530,48 @@ func (ps *prunerConfigStore) GetEnforcedConfigLevelFromNamespaceSpec(namespacesS
 		// Search by selectors
 		for _, resourceSpec := range resourceSpecs {
 			for _, selectorSpec := range resourceSpec.Selector {
-				// Try annotation matching first
-				if len(selector.MatchAnnotations) > 0 {
-					match := true
-					for key, value := range selector.MatchAnnotations {
-						if resourceAnnotationValue, exists := selectorSpec.MatchAnnotations[key]; !exists || resourceAnnotationValue != value {
-							match = false
-							break
+				annotationsMatch := true
+				labelsMatch := true
+
+				// Check if ConfigMap's required annotations exist in the resource
+				if len(selectorSpec.MatchAnnotations) > 0 {
+					if len(selector.MatchAnnotations) == 0 {
+						// ConfigMap requires annotations but resource has none - no match
+						annotationsMatch = false
+					} else {
+						// Check if all ConfigMap's required annotations exist in resource
+						for key, value := range selectorSpec.MatchAnnotations {
+							if resourceAnnotationValue, exists := selector.MatchAnnotations[key]; !exists || resourceAnnotationValue != value {
+								annotationsMatch = false
+								break
+							}
 						}
-					}
-					if match {
-						enforcedConfigLevel = resourceSpec.EnforcedConfigLevel
-						if enforcedConfigLevel != nil {
-							return enforcedConfigLevel
-						}
-						break
 					}
 				}
 
-				// Try label matching if no annotation match
-				if len(selector.MatchLabels) > 0 {
-					match := true
-					for key, value := range selector.MatchLabels {
-						if resourceLabelValue, exists := selectorSpec.MatchLabels[key]; !exists || resourceLabelValue != value {
-							match = false
-							break
+				// Check if ConfigMap's required labels exist in the resource
+				if len(selectorSpec.MatchLabels) > 0 {
+					if len(selector.MatchLabels) == 0 {
+						// ConfigMap requires labels but resource has none - no match
+						labelsMatch = false
+					} else {
+						// Check if all ConfigMap's required labels exist in resource
+						for key, value := range selectorSpec.MatchLabels {
+							if resourceLabelValue, exists := selector.MatchLabels[key]; !exists || resourceLabelValue != value {
+								labelsMatch = false
+								break
+							}
 						}
 					}
-					if match {
-						enforcedConfigLevel = resourceSpec.EnforcedConfigLevel
-						if enforcedConfigLevel != nil {
-							return enforcedConfigLevel
-						}
-						break
+				}
+
+				// Both annotations and labels must match (AND logic)
+				if annotationsMatch && labelsMatch {
+					enforcedConfigLevel = resourceSpec.EnforcedConfigLevel
+					if enforcedConfigLevel != nil {
+						return enforcedConfigLevel
 					}
+					break
 				}
 			}
 		}

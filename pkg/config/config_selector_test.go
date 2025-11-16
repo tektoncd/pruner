@@ -162,10 +162,17 @@ func TestSelectorMatching_Precedence(t *testing.T) {
 			wantID:       "identifiedBy_resource_selector",
 		},
 		{
-			name:         "no match when name doesn't exist",
+			name:         "selector match when name doesn't exist",
 			resourceName: "non-existent",
 			selector:     SelectorSpec{MatchLabels: map[string]string{"app": "myapp"}},
-			wantTTL:      0,
+			wantTTL:      3600, // Falls through to selector matching after name mismatch
+			wantID:       "identifiedBy_resource_selector",
+		},
+		{
+			name:         "no match when both name and selector don't match",
+			resourceName: "non-existent",
+			selector:     SelectorSpec{MatchLabels: map[string]string{"app": "different"}},
+			wantTTL:      0, // Neither name nor selector match
 			wantID:       "",
 		},
 	}
