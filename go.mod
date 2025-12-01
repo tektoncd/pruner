@@ -4,6 +4,9 @@ go 1.24.0
 
 toolchain go1.24.6
 
+// Retract v0.3.2 as it was an unintended release
+retract v0.3.2
+
 require (
 	github.com/stretchr/testify v1.11.1
 	github.com/tektoncd/pipeline v1.6.0
