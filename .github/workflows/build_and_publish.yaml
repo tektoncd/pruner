@@ -1,5 +1,5 @@
 name: build and publish
-on:
+"on":
   workflow_dispatch: {}
   push:
     tags: ["v*"]
@@ -40,7 +40,7 @@ jobs:
       - name: generate a build timestamp and sha256sum files
         run: |
           cd builds
-          echo `date -u +'%Y%m%d%H%M%S'` > ./build_timestamp.txt  
+          echo `date -u +'%Y%m%d%H%M%S'` > ./build_timestamp.txt
           echo `date -u +'%Y-%m-%dT%H:%M:%S%:z'` >> ./build_timestamp.txt
           sha256sum *.yaml > ./SHA256SUMS.txt
 
