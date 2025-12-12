@@ -9,6 +9,10 @@ name: Pruner kind E2E Tests
     branches:
       - main
       - release-*
+  merge_group:
+    branches:
+      - main
+      - release-*
 
 defaults:
   run:
