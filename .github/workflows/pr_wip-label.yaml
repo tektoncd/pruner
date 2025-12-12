@@ -1,0 +1,76 @@
+---
+name: Work In Progress Label
+# Automatically adds/removes do-not-merge/work-in-progress label based on PR title
+# Replaces Prow WIP plugin
+
+'on':
+  pull_request_target:
+    types:
+      - opened
+      - reopened
+      - synchronize
+      - edited
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+jobs:
+  manage_wip_label:
+    name: Manage WIP label
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check PR title for WIP indicators
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea  # v7.0.1
+        with:
+          script: |
+            const pr = context.payload.pull_request;
+            const title = pr.title.toLowerCase();
+
+            // WIP indicators in title
+            const wipPatterns = [
+              /^\[wip\]/i,
+              /^wip:/i,
+              /^wip\s/i,
+              /^\[draft\]/i,
+              /^draft:/i,
+              /^draft\s/i,
+              /🚧/,
+            ];
+
+            const isWip = wipPatterns.some(pattern => pattern.test(pr.title)) || pr.draft;
+
+            console.log('PR title:', pr.title);
+            console.log('Is draft:', pr.draft);
+            console.log('Is WIP:', isWip);
+
+            const labels = pr.labels.map(label => label.name);
+            const hasWipLabel = labels.includes('do-not-merge/work-in-progress');
+
+            if (isWip && !hasWipLabel) {
+              // Add WIP label
+              console.log('Adding do-not-merge/work-in-progress label');
+              await github.rest.issues.addLabels({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: pr.number,
+                labels: ['do-not-merge/work-in-progress']
+              });
+            } else if (!isWip && hasWipLabel) {
+              // Remove WIP label
+              console.log('Removing do-not-merge/work-in-progress label');
+              try {
+                await github.rest.issues.removeLabel({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: pr.number,
+                  name: 'do-not-merge/work-in-progress'
+                });
+              } catch (error) {
+                console.log('Label not found or already removed:', error.message);
+              }
+            } else {
+              console.log('No label change needed');
+            }

@@ -14,7 +14,6 @@ defaults:
   run:
     shell: bash
     working-directory: ./
-
 jobs:
   e2e-test:
     name: e2e test

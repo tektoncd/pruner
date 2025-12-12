@@ -20,7 +20,80 @@ defaults:
     working-directory: ./
 
 jobs:
+  # Wait for CI checks to pass before running E2E tests
+  wait-for-ci:
+    name: Wait for CI checks
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - name: Wait for CI workflow
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea  # v7.0.1
+        with:
+          script: |
+            const checkNames = [
+              'Build',
+              'Unit Tests',
+              'Linting',
+              'License Check',
+              'Ko Resolve (Multi-arch)'
+            ];
+
+            const maxAttempts = 120; // 5 minutes max wait
+            const delayMs = 5000; // 5 seconds between checks
+
+            for (let attempt = 0; attempt < maxAttempts; attempt++) {
+              const { data: checkRuns } = await github.rest.checks.listForRef({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                ref: context.payload.pull_request.head.sha
+              });
+
+              const relevantChecks = checkRuns.check_runs.filter(check =>
+                checkNames.includes(check.name)
+              );
+
+              console.log(`Attempt ${attempt + 1}/${maxAttempts}`);
+              console.log('Check statuses:', relevantChecks.map(c => `${c.name}: ${c.status} (${c.conclusion})`).join(', '));
+
+              // Check if all required checks exist and are completed
+              const allChecksPresent = checkNames.every(name =>
+                relevantChecks.some(check => check.name === name)
+              );
+
+              if (allChecksPresent) {
+                const allCompleted = relevantChecks.every(check =>
+                  check.status === 'completed'
+                );
+
+                if (allCompleted) {
+                  const allPassed = relevantChecks.every(check =>
+                    check.conclusion === 'success'
+                  );
+
+                  if (allPassed) {
+                    console.log('✅ All CI checks passed!');
+                    return;
+                  } else {
+                    const failedChecks = relevantChecks.filter(c => c.conclusion !== 'success');
+                    console.log('❌ Some CI checks failed:', failedChecks.map(c => c.name).join(', '));
+                    core.setFailed('CI checks failed. E2E tests will not run.');
+                    return;
+                  }
+                }
+              }
+
+              // Wait before next attempt
+              console.log(`Waiting ${delayMs/1000} seconds before next check...`);
+              await new Promise(resolve => setTimeout(resolve, delayMs));
+            }
+
+            console.log('⏱️ Timeout waiting for CI checks');
+            core.setFailed('Timeout waiting for CI checks to complete');
+
   k8s:
+    needs: [wait-for-ci]
+    # Skip the wait-for-ci dependency on push/merge_group events
+    if: ${{ !failure() && (github.event_name != 'pull_request' || needs.wait-for-ci.result == 'success') }}
     strategy:
       fail-fast: false  # Keep running if one leg fails.
       matrix:
@@ -34,6 +107,9 @@ jobs:
       pipelines-release: v0.65.0
   # This job is for testing the latest LTS version of Tekton Pipelines
   pipelines-lts:
+    needs: [wait-for-ci]
+    # Skip the wait-for-ci dependency on push/merge_group events
+    if: ${{ !failure() && (github.event_name != 'pull_request' || needs.wait-for-ci.result == 'success') }}
     strategy:
       fail-fast: false  # Keep running if one leg fails.
       matrix:
