@@ -92,7 +92,7 @@ spec:
       cp ${DOCKER_CONFIG} /workspace/docker-config.json
 
   - name: create-ko-yaml
-    image: cgr.dev/chainguard/go:latest-dev@sha256:2f71c4d2c68eb401c9311611663d2d12a0632fb29895bbccf3c840d79a4d0f9f
+    image: cgr.dev/chainguard/go:latest-dev@sha256:896af28e4241abe84ffe9171d401666b3e4eee1e3f2681288a9b93d8324c66cd
     script: |
       #!/bin/sh
       set -ex
@@ -130,7 +130,7 @@ spec:
       cat /workspace/.ko.yaml
 
   - name: run-ko
-    image: ghcr.io/tektoncd/plumbing/ko@sha256:d95b8e80ddea355c33a1598df3272214eb71f5f523df4955daf168d71fc0fcb5
+    image: ghcr.io/tektoncd/plumbing/ko@sha256:09d734062d040c77687867b484a664f2fd1355216068ad99f4e9775764b4345c
     env:
     - name: KO_DOCKER_REPO
       value: $(params.imageRegistry)/$(params.imageRegistryPath)
@@ -197,7 +197,7 @@ spec:
       sed -i -e 's/\(pruner.tekton.dev\/release\): "devel"/\1: "$(params.versionTag)"/g' -e 's/\(app.kubernetes.io\/version\): "devel"/\1: "$(params.versionTag)"/g' -e 's/\(version\): "devel"/\1: "$(params.versionTag)"/g' ${OUTPUT_RELEASE_DIR}/release.notags.yaml
 
   - name: koparse
-    image: ghcr.io/tektoncd/plumbing/koparse@sha256:71f041a28d278f6f4a37cdab5a3534e935a512e104e7f2fb280eda3971342b3c
+    image: ghcr.io/tektoncd/plumbing/koparse@sha256:5b01e9e5795df430d533743729fe2c84a67c25c4fbc23a697c2c06c4f2925fa7
     script: |
       set -ex
 
