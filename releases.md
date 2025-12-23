@@ -38,15 +38,16 @@ Further documentation available:
 
 ### v0.3
 
-- **Latest Release**: [v0.3.3](https://github.com/tektoncd/pruner/releases/tag/v0.3.3)
-  (2025-12-01)
-  ([docs](https://github.com/tektoncd/pruner/tree/v0.3.3/docs),
-  [tutorials](https://github.com/tektoncd/pruner/tree/v0.3.3/docs/tutorials/README.md))
+- **Latest Release**: [v0.3.4](https://github.com/tektoncd/pruner/releases/tag/v0.3.4)
+  (2025-12-23)
+  ([docs](https://github.com/tektoncd/pruner/tree/v0.3.4/docs),
+  [tutorials](https://github.com/tektoncd/pruner/tree/v0.3.4/docs/tutorials/README.md))
 - **Initial Release**: [v0.3.0](https://github.com/tektoncd/pruner/releases/tag/v0.3.0)
   (2025-11-07)
 - **Patch Releases**: [v0.3.0](https://github.com/tektoncd/pruner/releases/tag/v0.3.0),
   [v0.3.1](https://github.com/tektoncd/pruner/releases/tag/v0.3.1),
-  [v0.3.3](https://github.com/tektoncd/pruner/releases/tag/v0.3.3)
+  [v0.3.3](https://github.com/tektoncd/pruner/releases/tag/v0.3.3),
+  [v0.3.4](https://github.com/tektoncd/pruner/releases/tag/v0.3.4)
 
 ### Required Kubernetes Version
 
