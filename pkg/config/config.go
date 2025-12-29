@@ -67,34 +67,34 @@ const (
 // ResourceSpec is used to hold the config of a specific resource
 // Only used in namespace-level ConfigMaps (tekton-pruner-namespace-spec), NOT in global ConfigMaps
 type ResourceSpec struct {
-	Name         string         `yaml:"name,omitempty"`     // Exact name of the parent Pipeline or Task
-	Selector     []SelectorSpec `yaml:"selector,omitempty"` // Supports selection based on labels and annotations. If Name is given, Name takes precedence
-	PrunerConfig `yaml:",inline"`
+	Name         string         `yaml:"name,omitempty" json:"name,omitempty"`         // Exact name of the parent Pipeline or Task
+	Selector     []SelectorSpec `yaml:"selector,omitempty" json:"selector,omitempty"` // Supports selection based on labels and annotations. If Name is given, Name takes precedence
+	PrunerConfig `yaml:",inline,omitempty" json:",inline,omitempty"`
 }
 
 // SelectorSpec allows specifying selectors for matching resources like PipelineRun or TaskRun
 // Only applicable in namespace-level ConfigMaps, NOT in global ConfigMaps
 type SelectorSpec struct {
 	// Match by labels AND annotations. If both are specified, BOTH must match (AND logic)
-	MatchLabels      map[string]string `yaml:"matchLabels,omitempty"`
-	MatchAnnotations map[string]string `yaml:"matchAnnotations,omitempty"`
+	MatchLabels      map[string]string `yaml:"matchLabels,omitempty" json:"matchLabels,omitempty"`
+	MatchAnnotations map[string]string `yaml:"matchAnnotations,omitempty" json:"matchAnnotations,omitempty"`
 }
 
 // NamespaceSpec is used to hold the pruning config of a specific namespace and its resources
 // Used in both global ConfigMap (tekton-pruner-default-spec) and namespace ConfigMap (tekton-pruner-namespace-spec)
 // Selector support (PipelineRuns/TaskRuns arrays) ONLY works in namespace ConfigMaps
 type NamespaceSpec struct {
-	PrunerConfig `yaml:",inline"` // Root-level defaults
-	PipelineRuns []ResourceSpec   `yaml:"pipelineRuns,omitempty"` // Selector-based configs (namespace ConfigMap only)
-	TaskRuns     []ResourceSpec   `yaml:"taskRuns,omitempty"`     // Selector-based configs (namespace ConfigMap only)
+	PrunerConfig `yaml:",inline,omitempty" json:",inline,omitempty"` // Root-level defaults
+	PipelineRuns []ResourceSpec                                      `yaml:"pipelineRuns,omitempty" json:"pipelineRuns,omitempty"` // Selector-based configs (namespace ConfigMap only)
+	TaskRuns     []ResourceSpec                                      `yaml:"taskRuns,omitempty" json:"taskRuns,omitempty"`         // Selector-based configs (namespace ConfigMap only)
 }
 
 // GlobalConfig represents the global ConfigMap (tekton-pruner-default-spec)
 // Root-level fields are defaults; Namespaces map is for per-namespace defaults
 // NOTE: Selector support (PipelineRuns/TaskRuns arrays) is IGNORED in global ConfigMap
 type GlobalConfig struct {
-	PrunerConfig `yaml:",inline"`         // Global root-level defaults
-	Namespaces   map[string]NamespaceSpec `yaml:"namespaces,omitempty" json:"namespaces,omitempty"` // Per-namespace defaults (selectors ignored)
+	PrunerConfig `yaml:",inline,omitempty" json:",inline,omitempty"` // Global root-level defaults
+	Namespaces   map[string]NamespaceSpec                            `yaml:"namespaces,omitempty" json:"namespaces,omitempty"` // Per-namespace defaults (selectors ignored)
 }
 
 // PrunerConfig used to hold the cluster-wide pruning config as well as namespace specific pruning config
