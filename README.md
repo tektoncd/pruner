@@ -69,7 +69,7 @@ kubectl get pods -n tekton-pipelines -l app=tekton-pruner-controller
 > 
 > **System Boundaries**: Do NOT create namespace-level ConfigMaps in:
 > - System namespaces (`kube-*`, `openshift-*`)
-> - Tekton controller namespaces (`tekton-pipelines`, `tekton-*`)
+> - Tekton controller namespaces (`tekton-pipelines`, `tekton-operator`)
 
 ### Configuration Hierarchy
 
