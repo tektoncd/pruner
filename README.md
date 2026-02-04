@@ -55,7 +55,7 @@ kubectl get pods -n tekton-pipelines -l app=tekton-pruner-controller
 
 ### Important: v0.3.2 Retraction
 
-**Version v0.3.2 has been retracted** from the Go module registry due to it being an unintended release. Users are recommended not to use v0.3.2
+**Version v0.3.2 has been retracted** from the Go module registry due to it being an unintended release. Users are recommended not to use v0.3.2.
 
 ## Configuration
 
