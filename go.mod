@@ -140,3 +140,9 @@ require (
 	sigs.k8s.io/structured-merge-diff/v4 v4.6.0 // indirect
 	sigs.k8s.io/yaml v1.6.0 // indirect
 )
+
+// otel/sdk/metric has a soft/runtime dependency which makes it incompatible with
+// this knative version. See: https://github.com/open-telemetry/opentelemetry-go/issues/7297
+replace go.opentelemetry.io/otel/sdk v1.39.0 => go.opentelemetry.io/otel/sdk v1.37.0
+
+replace go.opentelemetry.io/otel/sdk/metric v1.39.0 => go.opentelemetry.io/otel/sdk/metric v1.37.0
