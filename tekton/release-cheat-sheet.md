@@ -97,7 +97,7 @@ the pruner repo, a terminal window and a text editor.
     NAME                    VALUE
     ∙ commit-sha            ff6d7abebde12460aecd061ab0f6fd21053ba8a7
     ∙ release-file           https://infra.tekton.dev/tekton-releases/pruner/previous/v0.3.4/release.yaml
-    ∙ release-file-no-tag    https://infra.tekton.dev/tekton-releases/pruner/previous/v0.3.4/release.notag.yaml
+    ∙ release-file-no-tag    https://infra.tekton.dev/tekton-releases/pruner/previous/v0.3.4/release.notags.yaml
 
     (...)
     ```
