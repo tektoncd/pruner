@@ -5,14 +5,7 @@ name: Pruner kind E2E Tests
     branches:
       - main
       - release-*
-  pull_request:
-    branches:
-      - main
-      - release-*
-  merge_group:
-    branches:
-      - main
-      - release-*
+  workflow_call: {}
 
 defaults:
   run:

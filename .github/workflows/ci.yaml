@@ -104,9 +104,13 @@ jobs:
         KO_DOCKER_REPO=example.com ko resolve --platform=linux/amd64,linux/arm64 --push=false -R -f config 1>/dev/null
         echo "Ko resolve succeeded for multi-arch build."
 
+  e2e-tests:
+    needs: [build]
+    uses: ./.github/workflows/kind-e2e.yaml
+
   ci-summary:
     name: CI summary
-    needs: [build, unit-tests, linting, check-licenses, ko-resolve]
+    needs: [build, unit-tests, linting, check-licenses, ko-resolve, e2e-tests]
     runs-on: ubuntu-latest
     if: always()
     steps:
@@ -118,6 +122,7 @@ jobs:
           "linting=${{ needs.linting.result }}"
           "check-licenses=${{ needs.check-licenses.result }}"
           "ko-resolve=${{ needs.ko-resolve.result }}"
+          "e2e-tests=${{ needs.e2e-tests.result }}"
         )
         failed=0
         for r in "${results[@]}"; do
