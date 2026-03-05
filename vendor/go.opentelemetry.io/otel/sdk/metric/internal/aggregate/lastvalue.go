@@ -5,179 +5,111 @@ package aggregate // import "go.opentelemetry.io/otel/sdk/metric/internal/aggreg
 
 import (
 	"context"
+	"sync"
 	"time"
 
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 )
 
-// lastValuePoint is timestamped measurement data.
-type lastValuePoint[N int64 | float64] struct {
+// datapoint is timestamped measurement data.
+type datapoint[N int64 | float64] struct {
 	attrs attribute.Set
-	value atomicN[N]
+	value N
 	res   FilteredExemplarReservoir[N]
 }
 
-// lastValueMap summarizes a set of measurements as the last one made.
-type lastValueMap[N int64 | float64] struct {
-	newRes func(attribute.Set) FilteredExemplarReservoir[N]
-	values limitedSyncMap
-}
-
-func (s *lastValueMap[N]) measure(
-	ctx context.Context,
-	value N,
-	fltrAttr attribute.Set,
-	droppedAttr []attribute.KeyValue,
-) {
-	lv := s.values.LoadOrStoreAttr(fltrAttr, func(attr attribute.Set) any {
-		return &lastValuePoint[N]{
-			res:   s.newRes(attr),
-			attrs: attr,
-		}
-	}).(*lastValuePoint[N])
-
-	lv.value.Store(value)
-	lv.res.Offer(ctx, value, droppedAttr)
-}
-
-func newDeltaLastValue[N int64 | float64](
-	limit int,
-	r func(attribute.Set) FilteredExemplarReservoir[N],
-) *deltaLastValue[N] {
-	return &deltaLastValue[N]{
+func newLastValue[N int64 | float64](limit int, r func(attribute.Set) FilteredExemplarReservoir[N]) *lastValue[N] {
+	return &lastValue[N]{
 		newRes: r,
+		limit:  newLimiter[datapoint[N]](limit),
+		values: make(map[attribute.Distinct]datapoint[N]),
 		start:  now(),
-		hotColdValMap: [2]lastValueMap[N]{
-			{
-				values: limitedSyncMap{aggLimit: limit},
-				newRes: r,
-			},
-			{
-				values: limitedSyncMap{aggLimit: limit},
-				newRes: r,
-			},
-		},
 	}
 }
 
-// deltaLastValue summarizes a set of measurements as the last one made.
-type deltaLastValue[N int64 | float64] struct {
+// lastValue summarizes a set of measurements as the last one made.
+type lastValue[N int64 | float64] struct {
+	sync.Mutex
+
 	newRes func(attribute.Set) FilteredExemplarReservoir[N]
+	limit  limiter[datapoint[N]]
+	values map[attribute.Distinct]datapoint[N]
 	start  time.Time
-
-	hcwg          hotColdWaitGroup
-	hotColdValMap [2]lastValueMap[N]
 }
 
-func (s *deltaLastValue[N]) measure(
-	ctx context.Context,
-	value N,
-	fltrAttr attribute.Set,
-	droppedAttr []attribute.KeyValue,
-) {
-	hotIdx := s.hcwg.start()
-	defer s.hcwg.done(hotIdx)
-	s.hotColdValMap[hotIdx].measure(ctx, value, fltrAttr, droppedAttr)
+func (s *lastValue[N]) measure(ctx context.Context, value N, fltrAttr attribute.Set, droppedAttr []attribute.KeyValue) {
+	s.Lock()
+	defer s.Unlock()
+
+	attr := s.limit.Attributes(fltrAttr, s.values)
+	d, ok := s.values[attr.Equivalent()]
+	if !ok {
+		d.res = s.newRes(attr)
+	}
+
+	d.attrs = attr
+	d.value = value
+	d.res.Offer(ctx, value, droppedAttr)
+
+	s.values[attr.Equivalent()] = d
 }
 
-func (s *deltaLastValue[N]) collect(
-	dest *metricdata.Aggregation, //nolint:gocritic // The pointer is needed for the ComputeAggregation interface
-) int {
+func (s *lastValue[N]) delta(dest *metricdata.Aggregation) int {
 	t := now()
-	n := s.copyAndClearDpts(dest, t)
-	// Update start time for delta temporality.
-	s.start = t
-	return n
-}
-
-// copyAndClearDpts copies the lastValuePoints held by s into dest. The number of lastValuePoints
-// copied is returned.
-func (s *deltaLastValue[N]) copyAndClearDpts(
-	dest *metricdata.Aggregation, //nolint:gocritic // The pointer is needed for the ComputeAggregation interface
-	t time.Time,
-) int {
 	// Ignore if dest is not a metricdata.Gauge. The chance for memory reuse of
 	// the DataPoints is missed (better luck next time).
 	gData, _ := (*dest).(metricdata.Gauge[N])
-	// delta always clears values on collection
-	readIdx := s.hcwg.swapHotAndWait()
-	// The len will not change while we iterate over values, since we waited
-	// for all writes to finish to the cold values and len.
-	n := s.hotColdValMap[readIdx].values.Len()
-	dPts := reset(gData.DataPoints, n, n)
 
-	var i int
-	s.hotColdValMap[readIdx].values.Range(func(_, value any) bool {
-		v := value.(*lastValuePoint[N])
-		dPts[i].Attributes = v.attrs
-		dPts[i].StartTime = s.start
-		dPts[i].Time = t
-		dPts[i].Value = v.value.Load()
-		collectExemplars[N](&dPts[i].Exemplars, v.res.Collect)
-		i++
-		return true
-	})
-	gData.DataPoints = dPts
+	s.Lock()
+	defer s.Unlock()
+
+	n := s.copyDpts(&gData.DataPoints, t)
 	// Do not report stale values.
-	s.hotColdValMap[readIdx].values.Clear()
+	clear(s.values)
+	// Update start time for delta temporality.
+	s.start = t
+
 	*dest = gData
-	return i
+
+	return n
 }
 
-// cumulativeLastValue summarizes a set of measurements as the last one made.
-type cumulativeLastValue[N int64 | float64] struct {
-	lastValueMap[N]
-	start time.Time
-}
-
-func newCumulativeLastValue[N int64 | float64](
-	limit int,
-	r func(attribute.Set) FilteredExemplarReservoir[N],
-) *cumulativeLastValue[N] {
-	return &cumulativeLastValue[N]{
-		lastValueMap: lastValueMap[N]{
-			values: limitedSyncMap{aggLimit: limit},
-			newRes: r,
-		},
-		start: now(),
-	}
-}
-
-func (s *cumulativeLastValue[N]) collect(
-	dest *metricdata.Aggregation, //nolint:gocritic // The pointer is needed for the ComputeAggregation interface
-) int {
+func (s *lastValue[N]) cumulative(dest *metricdata.Aggregation) int {
 	t := now()
 	// Ignore if dest is not a metricdata.Gauge. The chance for memory reuse of
-	// the lastValuePoints is missed (better luck next time).
+	// the DataPoints is missed (better luck next time).
 	gData, _ := (*dest).(metricdata.Gauge[N])
 
-	// Values are being concurrently written while we iterate, so only use the
-	// current length for capacity.
-	dPts := reset(gData.DataPoints, 0, s.values.Len())
+	s.Lock()
+	defer s.Unlock()
 
-	var i int
-	s.values.Range(func(_, value any) bool {
-		v := value.(*lastValuePoint[N])
-		newPt := metricdata.DataPoint[N]{
-			Attributes: v.attrs,
-			StartTime:  s.start,
-			Time:       t,
-			Value:      v.value.Load(),
-		}
-		collectExemplars[N](&newPt.Exemplars, v.res.Collect)
-		dPts = append(dPts, newPt)
-		i++
-		return true
-	})
-	gData.DataPoints = dPts
+	n := s.copyDpts(&gData.DataPoints, t)
 	// TODO (#3006): This will use an unbounded amount of memory if there
 	// are unbounded number of attribute sets being aggregated. Attribute
 	// sets that become "stale" need to be forgotten so this will not
 	// overload the system.
 	*dest = gData
 
-	return i
+	return n
+}
+
+// copyDpts copies the datapoints held by s into dest. The number of datapoints
+// copied is returned.
+func (s *lastValue[N]) copyDpts(dest *[]metricdata.DataPoint[N], t time.Time) int {
+	n := len(s.values)
+	*dest = reset(*dest, n, n)
+
+	var i int
+	for _, v := range s.values {
+		(*dest)[i].Attributes = v.attrs
+		(*dest)[i].StartTime = s.start
+		(*dest)[i].Time = t
+		(*dest)[i].Value = v.value
+		collectExemplars(&(*dest)[i].Exemplars, v.res.Collect)
+		i++
+	}
+	return n
 }
 
 // newPrecomputedLastValue returns an aggregator that summarizes a set of
@@ -186,23 +118,47 @@ func newPrecomputedLastValue[N int64 | float64](
 	limit int,
 	r func(attribute.Set) FilteredExemplarReservoir[N],
 ) *precomputedLastValue[N] {
-	return &precomputedLastValue[N]{deltaLastValue: newDeltaLastValue[N](limit, r)}
+	return &precomputedLastValue[N]{lastValue: newLastValue[N](limit, r)}
 }
 
 // precomputedLastValue summarizes a set of observations as the last one made.
 type precomputedLastValue[N int64 | float64] struct {
-	*deltaLastValue[N]
+	*lastValue[N]
 }
 
-func (s *precomputedLastValue[N]) delta(
-	dest *metricdata.Aggregation, //nolint:gocritic // The pointer is needed for the ComputeAggregation interface
-) int {
-	return s.collect(dest)
+func (s *precomputedLastValue[N]) delta(dest *metricdata.Aggregation) int {
+	t := now()
+	// Ignore if dest is not a metricdata.Gauge. The chance for memory reuse of
+	// the DataPoints is missed (better luck next time).
+	gData, _ := (*dest).(metricdata.Gauge[N])
+
+	s.Lock()
+	defer s.Unlock()
+
+	n := s.copyDpts(&gData.DataPoints, t)
+	// Do not report stale values.
+	clear(s.values)
+	// Update start time for delta temporality.
+	s.start = t
+
+	*dest = gData
+
+	return n
 }
 
-func (s *precomputedLastValue[N]) cumulative(
-	dest *metricdata.Aggregation, //nolint:gocritic // The pointer is needed for the ComputeAggregation interface
-) int {
-	// Do not reset the start time.
-	return s.copyAndClearDpts(dest, now())
+func (s *precomputedLastValue[N]) cumulative(dest *metricdata.Aggregation) int {
+	t := now()
+	// Ignore if dest is not a metricdata.Gauge. The chance for memory reuse of
+	// the DataPoints is missed (better luck next time).
+	gData, _ := (*dest).(metricdata.Gauge[N])
+
+	s.Lock()
+	defer s.Unlock()
+
+	n := s.copyDpts(&gData.DataPoints, t)
+	// Do not report stale values.
+	clear(s.values)
+	*dest = gData
+
+	return n
 }
