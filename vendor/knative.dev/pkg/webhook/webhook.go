@@ -33,8 +33,11 @@ import (
 	kubeinformerfactory "knative.dev/pkg/injection/clients/namespacedkube/informers/factory"
 	"knative.dev/pkg/network"
 	"knative.dev/pkg/network/handlers"
+	"knative.dev/pkg/observability/semconv"
+	knativetls "knative.dev/pkg/tls"
 
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
+	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/trace"
@@ -46,11 +49,34 @@ import (
 	"knative.dev/pkg/system"
 )
 
-// Options contains the configuration for the webhook
+// Options contains the configuration for the webhook.
+//
+// TLS fields (TLSMinVersion, TLSMaxVersion, TLSCipherSuites, TLSCurvePreferences)
+// are resolved with the following precedence:
+//  1. Values set explicitly in Options (programmatic).
+//  2. WEBHOOK_TLS_* environment variables (WEBHOOK_TLS_MIN_VERSION,
+//     WEBHOOK_TLS_MAX_VERSION, WEBHOOK_TLS_CIPHER_SUITES, WEBHOOK_TLS_CURVE_PREFERENCES).
+//  3. Defaults (TLS 1.3 minimum version; zero values for the rest, meaning the
+//     Go standard library picks its defaults).
 type Options struct {
 	// TLSMinVersion contains the minimum TLS version that is acceptable to communicate with the API server.
 	// TLS 1.3 is the minimum version if not specified otherwise.
 	TLSMinVersion uint16
+
+	// TLSMaxVersion contains the maximum TLS version that is acceptable.
+	// If not set (0), the maximum version supported by the implementation will be used.
+	// This is useful for enforcing Modern profile (TLS 1.3 only) by setting both
+	// TLSMinVersion and TLSMaxVersion to tls.VersionTLS13.
+	TLSMaxVersion uint16
+
+	// TLSCipherSuites specifies the list of enabled cipher suites.
+	// If empty, a default list of secure cipher suites will be used.
+	// Note: Cipher suites are not configurable in TLS 1.3; they are determined by the implementation.
+	TLSCipherSuites []uint16
+
+	// TLSCurvePreferences specifies the elliptic curves that will be used in an ECDHE handshake.
+	// If empty, the default curves will be used.
+	TLSCurvePreferences []tls.CurveID
 
 	// ServiceName is the service name of the webhook.
 	ServiceName string
@@ -165,11 +191,36 @@ func New(
 
 	logger := logging.FromContext(ctx)
 
-	defaultTLSMinVersion := uint16(tls.VersionTLS13)
+	tlsCfg, err := knativetls.NewConfigFromEnv("WEBHOOK_")
+	if err != nil {
+		return nil, fmt.Errorf("reading TLS configuration from environment: %w", err)
+	}
+
+	// Replace the TLS configuration with the one from the environment if not set.
+	// Default to TLS 1.3 as the minimum version when neither the caller nor the
+	// environment specifies one.
 	if opts.TLSMinVersion == 0 {
-		opts.TLSMinVersion = TLSMinVersionFromEnv(defaultTLSMinVersion)
-	} else if opts.TLSMinVersion != tls.VersionTLS12 && opts.TLSMinVersion != tls.VersionTLS13 {
-		return nil, fmt.Errorf("unsupported TLS version: %d", opts.TLSMinVersion)
+		if tlsCfg.MinVersion != 0 {
+			opts.TLSMinVersion = tlsCfg.MinVersion
+		} else {
+			opts.TLSMinVersion = tls.VersionTLS13
+		}
+	}
+	if opts.TLSMaxVersion == 0 && tlsCfg.MaxVersion != 0 {
+		opts.TLSMaxVersion = tlsCfg.MaxVersion
+	}
+	if opts.TLSCipherSuites == nil && len(tlsCfg.CipherSuites) > 0 {
+		opts.TLSCipherSuites = tlsCfg.CipherSuites
+	}
+	if opts.TLSCurvePreferences == nil && len(tlsCfg.CurvePreferences) > 0 {
+		opts.TLSCurvePreferences = tlsCfg.CurvePreferences
+	}
+
+	if opts.TLSMinVersion != 0 && opts.TLSMinVersion != tls.VersionTLS12 && opts.TLSMinVersion != tls.VersionTLS13 {
+		return nil, fmt.Errorf("unsupported TLS minimum version %d: must be TLS 1.2 or TLS 1.3", opts.TLSMinVersion)
+	}
+	if opts.TLSMaxVersion != 0 && opts.TLSMinVersion > opts.TLSMaxVersion {
+		return nil, fmt.Errorf("TLS minimum version (%#x) is greater than maximum version (%#x)", opts.TLSMinVersion, opts.TLSMaxVersion)
 	}
 
 	syncCtx, cancel := context.WithCancel(context.Background())
@@ -191,7 +242,10 @@ func New(
 
 		//nolint:gosec // operator configures TLS min version (default is 1.3)
 		webhook.tlsConfig = &tls.Config{
-			MinVersion: opts.TLSMinVersion,
+			MinVersion:       opts.TLSMinVersion,
+			MaxVersion:       opts.TLSMaxVersion,
+			CipherSuites:     opts.TLSCipherSuites,
+			CurvePreferences: opts.TLSCurvePreferences,
 
 			// If we return (nil, error) the client sees - 'tls: internal error"
 			// If we return (nil, nil) the client sees - 'tls: no certificates configured'
@@ -232,18 +286,18 @@ func New(
 		switch c := controller.(type) {
 		case AdmissionController:
 			handler := admissionHandler(webhook, c, syncCtx.Done())
-			webhook.mux.Handle(c.Path(), otelhttp.WithRouteTag(c.Path(), handler))
+			webhook.mux.Handle(c.Path(), handler)
 
 		case ConversionController:
 			handler := conversionHandler(webhook, c)
-			webhook.mux.Handle(c.Path(), otelhttp.WithRouteTag(c.Path(), handler))
+			webhook.mux.Handle(c.Path(), handler)
 
 		default:
 			return nil, fmt.Errorf("unknown webhook controller type:  %T", controller)
 		}
 	}
 
-	return
+	return webhook, err
 }
 
 // InformersHaveSynced is called when the informers have all been synced, which allows any outstanding
@@ -278,6 +332,14 @@ func (wh *Webhook) Run(stop <-chan struct{}) error {
 		otelhttp.WithMeterProvider(wh.Options.MeterProvider),
 		otelhttp.WithTracerProvider(wh.Options.TracerProvider),
 		otelhttp.WithPropagators(wh.Options.TextMapPropagator),
+		otelhttp.WithMetricAttributesFn(func(r *http.Request) []attribute.KeyValue {
+			if r.URL.Path == "" {
+				return nil
+			}
+			return []attribute.KeyValue{
+				semconv.HTTPRoute(r.URL.Path),
+			}
+		}),
 		otelhttp.WithFilter(func(r *http.Request) bool {
 			// Don't trace kubelet probes
 			return !network.IsKubeletProbe(r)
@@ -333,9 +395,6 @@ func (wh *Webhook) Run(stop <-chan struct{}) error {
 	select {
 	case <-stop:
 		eg.Go(func() error {
-			// As we start to shutdown, disable keep-alives to avoid clients hanging onto connections.
-			server.SetKeepAlivesEnabled(false)
-
 			// Start failing readiness probes immediately.
 			logger.Info("Starting to fail readiness probes...")
 			drainer.Drain()
