@@ -1,115 +1,58 @@
 # Tekton Pruner Official Release Cheat Sheet
 
 These steps provide a no-frills guide to performing an official release
-of Tekton Pruner. To follow these steps you'll need a checkout of
-the pruner repo, a terminal window and a text editor.
+of Tekton Pruner. Releases are now largely automated via
+[Pipelines-as-Code](https://pipelinesascode.com) (PAC) on the `oci-ci-cd`
+cluster.
 
-1. [Setup a context to connect to the dogfooding cluster](#setup-dogfooding-context) if you haven't already.
+## How releases work
 
-1. Install the [rekor CLI](https://docs.sigstore.dev/rekor/installation/) if you haven't already.
+### Initial releases (e.g. v0.4.0)
 
-1. `cd` to root of Pruner git checkout.
+1. Create a release branch named `release-v<major>.<minor>.x` (e.g.
+   `release-v0.4.x`) from the desired commit on `main`.
+2. PAC automatically detects the branch creation and triggers the release
+   pipeline defined in `.tekton/release.yaml`.
+3. The version is derived from the branch name: `release-v0.4.x` → `v0.4.0`.
+4. Monitor the PipelineRun on the
+   [Tekton Dashboard](https://tekton.infra.tekton.dev/#/namespaces/releases-pruner/pipelineruns).
 
-1. [Install kustomize](https://kubectl.docs.kubernetes.io/installation/kustomize) if you haven't already.
+### Patch releases (e.g. v0.3.6)
 
-1. Select the commit you would like to build the release from (NOTE: the commit is full (40-digit) hash.)
-    - Select the most recent commit on the ***main branch*** if you are cutting a major or minor release i.e. `x.0.0` or `0.x.0`
-    - Select the most recent commit on the ***`release-<version number>x` branch***, e.g. [`release-v0.3.x`](https://github.com/tektoncd/pruner/tree/release-v0.3.x) if you are patching a release i.e. `v0.3.4`.
+Patch releases happen in two ways:
 
-1. Ensure the correct version of the release pipeline is installed on the cluster.
-   To do that, the selected commit should be checked-out locally
+- **Automatically**: A weekly cron (Thursday 10:00 UTC) in
+  `.github/workflows/patch-release.yaml` scans all `release-v*` branches.
+  If new commits exist since the last tag, it triggers a patch release via
+  PAC incoming webhook.
+- **Manually**: Run the "Patch Release" workflow from GitHub Actions
+  (`workflow_dispatch`) with the branch and version as inputs.
 
-    ```bash
-    kustomize build tekton | kubectl --context dogfooding replace -f -
+Both methods trigger the release pipeline defined in `.tekton/release-patch.yaml`
+on the `oci-ci-cd` cluster.
+
+## Post-release steps
+
+Once the release pipeline completes successfully:
+
+1. Check the PipelineRun results on the
+   [Tekton Dashboard](https://tekton.infra.tekton.dev/#/namespaces/releases-pruner/pipelineruns):
+
     ```
-
-1. Create a `release.env` file with environment variables for bash scripts in later steps, and source it:
-
-    ```bash
-    cat <<EOF > release.env
-    PRUNER_VERSION= # Example: v0.3.4
-    PRUNER_RELEASE_GIT_SHA= # SHA of the release to be released, e.g. 5b082b1106753e093593d12152c82e1c4b0f37e5
-    PRUNER_OLD_VERSION= # Example: v0.3.3
-    TEKTON_PACKAGE=tektoncd/pruner
-    PRUNER_REPO_NAME=pruner
-    EOF
-    . ./release.env
-    ```
-
-1. Confirm commit SHA matches what you want to release.
-
-    ```bash
-    git show $PRUNER_RELEASE_GIT_SHA
-    ```
-
-1. Create a workspace template file:
-
-   ```bash
-   WORKSPACE_TEMPLATE=$(mktemp /tmp/workspace-template.XXXXXX.yaml)
-   cat <<'EOF' > $WORKSPACE_TEMPLATE
-   spec:
-    accessModes:
-    - ReadWriteOnce
-    resources:
-      requests:
-        storage: 1Gi
-   EOF
-   ```
-
-1. Execute the release pipeline.
-    
-    **The minimum required tkn version is v0.30.0 or later**
-
-    **If you are back-porting include this flag: `--param=releaseAsLatest="false"`**
-
-   ```bash
-    tkn --context dogfooding pipeline start pruner-release \
-      --param package=github.com/tektoncd/pruner \
-      --param repoName="${PRUNER_REPO_NAME}" \
-      --param gitRevision="${PRUNER_RELEASE_GIT_SHA}" \
-      --param imageRegistry=ghcr.io \
-      --param imageRegistryPath=tektoncd/pruner \
-      --param imageRegistryRegions="" \
-      --param imageRegistryUser=tekton-robot \
-      --param serviceAccountImagesPath=credentials \
-      --param versionTag="${PRUNER_VERSION}" \
-      --param releaseBucket=tekton-releases \
-      --param koExtraArgs="" \
-      --workspace name=release-secret,secret=oci-release-secret \
-      --workspace name=release-images-secret,secret=ghcr-creds \
-      --workspace name=workarea,volumeClaimTemplateFile="${WORKSPACE_TEMPLATE}" \
-      --tasks-timeout 2h \
-      --pipeline-timeout 3h
-   ```
-
-    Accept the default values of the parameters (except for "releaseAsLatest" if backporting).
-
-1. Watch logs of pruner-release.
-
-1. Once the pipeline is complete, check its results:
-
-    ```bash
-    tkn --context dogfooding pr describe <pipeline-run-name>
-
-    (...)
     📝 Results
 
     NAME                    VALUE
     ∙ commit-sha            ff6d7abebde12460aecd061ab0f6fd21053ba8a7
-    ∙ release-file           https://infra.tekton.dev/tekton-releases/pruner/previous/v0.3.4/release.yaml
-    ∙ release-file-no-tag    https://infra.tekton.dev/tekton-releases/pruner/previous/v0.3.4/release.notags.yaml
-
-    (...)
+    ∙ release-file           https://infra.tekton.dev/tekton-releases/pruner/previous/v0.3.6/release.yaml
+    ∙ release-file-no-tag    https://infra.tekton.dev/tekton-releases/pruner/previous/v0.3.6/release.notags.yaml
     ```
 
-    The `commit-sha` should match `$PRUNER_RELEASE_GIT_SHA`.
-    The two URLs can be opened in the browser or via `curl` to download the release manifests.
-
-1. The YAMLs are now released! Anyone installing Tekton Pruner will get the new version. Time to create a new GitHub release announcement:
+1. Create a GitHub release announcement:
 
     1. Find the Rekor UUID for the release
 
     ```bash
+    PRUNER_VERSION=v0.3.6  # Set to the released version
     RELEASE_FILE=https://infra.tekton.dev/tekton-releases/pruner/previous/${PRUNER_VERSION}/release.yaml
     CONTROLLER_IMAGE_SHA=$(curl -L $RELEASE_FILE | sed -n 's/"//g;s/.*ghcr\.io.*controller.*@//p;')
     REKOR_UUID=$(rekor-cli search --sha $CONTROLLER_IMAGE_SHA | grep -v Found | head -1)
@@ -118,9 +61,19 @@ the pruner repo, a terminal window and a text editor.
 
     1. Execute the Draft Release Pipeline.
 
-        Create a pod template file:
+        [Setup a context to connect to the dogfooding cluster](#setup-dogfooding-context) if you haven't already.
 
-        ```shell
+        ```bash
+        WORKSPACE_TEMPLATE=$(mktemp /tmp/workspace-template.XXXXXX.yaml)
+        cat <<'EOF' > $WORKSPACE_TEMPLATE
+        spec:
+         accessModes:
+         - ReadWriteOnce
+         resources:
+           requests:
+             storage: 1Gi
+        EOF
+
         POD_TEMPLATE=$(mktemp /tmp/pod-template.XXXXXX.yaml)
         cat <<'EOF' > $POD_TEMPLATE
         securityContext:
@@ -130,43 +83,28 @@ the pruner repo, a terminal window and a text editor.
         EOF
         ```
 
-        ```shell
+        ```bash
+        PRUNER_RELEASE_GIT_SHA=<commit-sha-from-results>
+        PRUNER_OLD_VERSION=v0.3.5  # Previous version
+
         tkn pipeline start \
           --workspace name=shared,volumeClaimTemplateFile="${WORKSPACE_TEMPLATE}" \
           --workspace name=credentials,secret=oci-release-secret \
           --pod-template "${POD_TEMPLATE}" \
-          -p package="${TEKTON_PACKAGE}" \
+          -p package="tektoncd/pruner" \
           -p git-revision="$PRUNER_RELEASE_GIT_SHA" \
           -p release-tag="${PRUNER_VERSION}" \
           -p previous-release-tag="${PRUNER_OLD_VERSION}" \
           -p release-name="Tekton Pruner" \
-          -p repo-name="${PRUNER_REPO_NAME}" \
+          -p repo-name="pruner" \
           -p bucket="tekton-releases" \
           -p rekor-uuid="$REKOR_UUID" \
           release-draft-oci
         ```
 
-    1. Watch logs of resulting pipeline run on pipeline `release-draft-oci`
-
-    1. On successful completion, a URL will be logged. Visit that URL and look through the release notes.
-      1. Manually add upgrade and deprecation notices based on the generated release notes
-      1. Double-check that the list of commits here matches your expectations
-         for the release. You might need to remove incorrect commits or copy/paste commits
-         from the release branch. Refer to previous releases to confirm the expected format.
-
-    1. Un-check the "This is a pre-release" checkbox since you're making a legit for-reals release!
-
-    1. Publish the GitHub release once all notes are correct and in order.
-
-1. Create a branch for the release named `release-<version number>x`, e.g. [`release-v0.3.x`](https://github.com/tektoncd/pruner/tree/release-v0.3.x)
-   and push it to the repo https://github.com/tektoncd/pruner.
-   (This can be done on the Github UI.)
-   Make sure to fetch the commit specified in `PRUNER_RELEASE_GIT_SHA` to create the released branch.
-   > Background: The reason why we need to create a branch for the release named `release-<version number>x` is for future patch releases. Cherrypicked PRs for the patch release will be merged to this branch. For example, [v0.3.0](https://github.com/tektoncd/pruner/releases/tag/v0.3.0) has been already released, but later on we found that an important PR should have been included to that release. Therefore, we need to do a patch release i.e. v0.3.1 by cherrypicking this PR, which will trigger tekton-robot to create a new PR to merge the changes to the [release-v0.3.x branch](https://github.com/tektoncd/pruner/tree/release-v0.3.x).
-
-1. If the release introduces a new minimum version of Kubernetes required,
-   edit `README.md` on `main` branch and add the new requirement with in the
-   "Required Kubernetes Version" section
+    1. On successful completion, visit the logged URL and review the release notes.
+       Manually add upgrade and deprecation notices, verify the commit list, then
+       publish the GitHub release.
 
 1. Edit `releases.md` on the `main` branch, add an entry for the release.
    - In case of a patch release, replace the latest release with the new one,
@@ -177,18 +115,22 @@ the pruner repo, a terminal window and a text editor.
    - Check if any release is EOL, if so move it to the "End of Life Releases"
      section
 
-1. Push & make PR for updated `releases.md` and `README.md`
+1. If the release introduces a new minimum version of Kubernetes required,
+   edit `README.md` on `main` branch and add the new requirement in the
+   "Required Kubernetes Version" section.
 
-1. Test release that you just made against your own cluster (note `--context my-dev-cluster`):
+1. Push & make PR for updated `releases.md` and `README.md`.
+
+1. Test release that you just made against your own cluster:
 
     ```bash
     # Test latest
-    kubectl --context my-dev-cluster apply --filename https://infra.tekton.dev/tekton-releases/pruner/latest/release.yaml
+    kubectl apply --filename https://infra.tekton.dev/tekton-releases/pruner/latest/release.yaml
     ```
 
     ```bash
     # Test backport
-    kubectl --context my-dev-cluster apply --filename https://infra.tekton.dev/tekton-releases/pruner/previous/v0.3.4/release.yaml
+    kubectl apply --filename https://infra.tekton.dev/tekton-releases/pruner/previous/v0.3.6/release.yaml
     ```
 
 1. For major releases, update the [website sync configuration](https://github.com/tektoncd/website/blob/main/sync/config/pruner.yaml)
@@ -197,6 +139,41 @@ the pruner repo, a terminal window and a text editor.
 1. Announce the release in Slack channels #general, #announcements and #pruner.
 
 Congratulations, you're done!
+
+## Manual release (fallback)
+
+If the automated pipeline is unavailable, you can trigger a release manually
+using `tkn`:
+
+```bash
+WORKSPACE_TEMPLATE=$(mktemp /tmp/workspace-template.XXXXXX.yaml)
+cat <<'EOF' > $WORKSPACE_TEMPLATE
+spec:
+ accessModes:
+ - ReadWriteOnce
+ resources:
+   requests:
+     storage: 1Gi
+EOF
+
+tkn --context dogfooding pipeline start pruner-release \
+  --param package=github.com/tektoncd/pruner \
+  --param repoName="pruner" \
+  --param gitRevision="<COMMIT_SHA>" \
+  --param imageRegistry=ghcr.io \
+  --param imageRegistryPath=tektoncd/pruner \
+  --param imageRegistryRegions="" \
+  --param imageRegistryUser=tekton-robot \
+  --param serviceAccountImagesPath=credentials \
+  --param versionTag="<VERSION>" \
+  --param releaseBucket=tekton-releases \
+  --param koExtraArgs="" \
+  --workspace name=release-secret,secret=oci-release-secret \
+  --workspace name=release-images-secret,secret=ghcr-creds \
+  --workspace name=workarea,volumeClaimTemplateFile="${WORKSPACE_TEMPLATE}" \
+  --tasks-timeout 2h \
+  --pipeline-timeout 3h
+```
 
 ## Setup dogfooding context
 
@@ -213,12 +190,7 @@ Congratulations, you're done!
    a short memorable name such as `dogfooding`:
 
    ```bash
-   kubectl config current-context
-   ```
-   get the context name and replace with current_context_name
-
-   ```bash
-   kubectl config rename-context <current_context_name> dogfooding
+   kubectl config rename-context $(kubectl config current-context) dogfooding
    ```
 
 1. **Important: Switch `kubectl` back to your own cluster by default.**
