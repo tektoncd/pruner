@@ -14,7 +14,6 @@ defaults:
 
 permissions:
   contents: read
-  checks: write  # Used to annotate code in the PR
 
 jobs:
   build:
@@ -22,6 +21,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+      with:
+        persist-credentials: false
     - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c  # v6.4.0
       with:
         go-version-file: "go.mod"
@@ -35,6 +36,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+      with:
+        persist-credentials: false
     - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c  # v6.4.0
       with:
         go-version-file: "go.mod"
@@ -46,8 +49,13 @@ jobs:
     name: Linting
     needs: [build]
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      checks: write  # Used by golangci-lint-action to annotate code in the PR
     steps:
     - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+      with:
+        persist-credentials: false
     - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c  # v6.4.0
       with:
         go-version-file: "go.mod"
@@ -77,6 +85,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+      with:
+        persist-credentials: false
     - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c  # v6.4.0
       with:
         go-version-file: "go.mod"
@@ -91,6 +101,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+      with:
+        persist-credentials: false
     - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c  # v6.4.0
       with:
         go-version-file: "go.mod"
@@ -115,14 +127,21 @@ jobs:
     if: always()
     steps:
     - name: Check CI results
+      env:
+        BUILD_RESULT: ${{ needs.build.result }}
+        UNIT_TESTS_RESULT: ${{ needs.unit-tests.result }}
+        LINTING_RESULT: ${{ needs.linting.result }}
+        CHECK_LICENSES_RESULT: ${{ needs.check-licenses.result }}
+        KO_RESOLVE_RESULT: ${{ needs.ko-resolve.result }}
+        E2E_TESTS_RESULT: ${{ needs.e2e-tests.result }}
       run: |
         results=(
-          "build=${{ needs.build.result }}"
-          "unit-tests=${{ needs.unit-tests.result }}"
-          "linting=${{ needs.linting.result }}"
-          "check-licenses=${{ needs.check-licenses.result }}"
-          "ko-resolve=${{ needs.ko-resolve.result }}"
-          "e2e-tests=${{ needs.e2e-tests.result }}"
+          "build=${BUILD_RESULT}"
+          "unit-tests=${UNIT_TESTS_RESULT}"
+          "linting=${LINTING_RESULT}"
+          "check-licenses=${CHECK_LICENSES_RESULT}"
+          "ko-resolve=${KO_RESOLVE_RESULT}"
+          "e2e-tests=${E2E_TESTS_RESULT}"
         )
         failed=0
         for r in "${results[@]}"; do
