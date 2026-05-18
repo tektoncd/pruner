@@ -42,7 +42,7 @@ bin/%: cmd/% FORCE
 	$Q $(GO) build -mod=vendor $(LDFLAGS) -v -o $@ ./$<
 
 KO = $(or ${KO_BIN},${KO_BIN},$(BIN)/ko)
-$(BIN)/ko: PACKAGE=github.com/google/ko@latest
+$(BIN)/ko: PACKAGE=github.com/google/ko@v0.17.1
 
 .PHONY: apply
 apply: | $(KO) ; $(info $(M) ko apply -R -f config/) @ ## Apply config to the current cluster
