@@ -1,0 +1,80 @@
+---
+name: Needs Rebase Label
+# Automatically adds/removes needs-rebase label when PR has merge conflicts
+# Replaces Prow needs-rebase functionality
+
+'on':
+  pull_request_target:
+    types:
+      - opened
+      - reopened
+      - synchronize
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+jobs:
+  check_rebase_needed:
+    name: Check if rebase is needed
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check PR mergeable state
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea  # v7.0.1
+        with:
+          script: |
+            // Get fresh PR data to check mergeable state
+            const { data: pr } = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.payload.pull_request.number
+            });
+
+            console.log('PR mergeable state:', pr.mergeable_state);
+            console.log('PR mergeable:', pr.mergeable);
+
+            const labels = pr.labels.map(label => label.name);
+            const hasNeedsRebaseLabel = labels.includes('needs-rebase');
+
+            // PR needs rebase if it has conflicts (mergeable === false)
+            // mergeable_state can be: clean, dirty, unstable, blocked, unknown
+            const needsRebase = pr.mergeable === false || pr.mergeable_state === 'dirty';
+
+            console.log('Needs rebase:', needsRebase);
+            console.log('Has needs-rebase label:', hasNeedsRebaseLabel);
+
+            if (needsRebase && !hasNeedsRebaseLabel) {
+              // Add needs-rebase label
+              console.log('Adding needs-rebase label');
+              await github.rest.issues.addLabels({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: pr.number,
+                labels: ['needs-rebase']
+              });
+
+              // Add a comment
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: pr.number,
+                body: `This PR has merge conflicts and needs to be rebased. The \`needs-rebase\` label will be automatically removed once conflicts are resolved.`
+              });
+            } else if (!needsRebase && hasNeedsRebaseLabel) {
+              // Remove needs-rebase label
+              console.log('Removing needs-rebase label');
+              try {
+                await github.rest.issues.removeLabel({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: pr.number,
+                  name: 'needs-rebase'
+                });
+              } catch (error) {
+                console.log('Label not found or already removed:', error.message);
+              }
+            } else {
+              console.log('No label change needed');
+            }
