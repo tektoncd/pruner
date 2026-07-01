@@ -32,7 +32,6 @@ jobs:
 
   unit-tests:
     name: Unit Tests
-    needs: [build]
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
@@ -47,7 +46,6 @@ jobs:
 
   linting:
     name: Linting
-    needs: [build]
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -81,7 +79,6 @@ jobs:
 
   check-licenses:
     name: License Check
-    needs: [build]
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
@@ -97,7 +94,6 @@ jobs:
 
   ko-resolve:
     name: Ko Resolve (Multi-arch)
-    needs: [build]
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
