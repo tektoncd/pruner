@@ -21,6 +21,10 @@ updates:
     - "dependencies"
     - "release-note-none"
     - "kind/misc"
+    groups:
+      codeql:
+        patterns:
+          - "github/codeql-action/*"
   - package-ecosystem: "docker"
     directory: "/tekton"
     schedule:
