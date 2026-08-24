@@ -709,7 +709,7 @@ k8s.io/api/storagemigration/v1beta1
 ## explicit; go 1.25.0
 k8s.io/apiextensions-apiserver/pkg/apis/apiextensions
 k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1
-# k8s.io/apimachinery v0.36.3
+# k8s.io/apimachinery v0.36.4
 ## explicit; go 1.26.0
 k8s.io/apimachinery/pkg/api/equality
 k8s.io/apimachinery/pkg/api/errors
@@ -1186,7 +1186,6 @@ knative.dev/pkg/changeset
 knative.dev/pkg/client/injection/kube/client
 knative.dev/pkg/client/injection/kube/informers/core/v1/configmap
 knative.dev/pkg/client/injection/kube/informers/core/v1/namespace
-knative.dev/pkg/client/injection/kube/informers/core/v1/secret
 knative.dev/pkg/client/injection/kube/informers/factory
 knative.dev/pkg/codegen/cmd/injection-gen
 knative.dev/pkg/codegen/cmd/injection-gen/args
