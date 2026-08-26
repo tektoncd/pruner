@@ -42,6 +42,12 @@ spec:
           # This is the Go import path for the binary that is containerized
           # and substituted here.
           image: ko://github.com/tektoncd/pruner/cmd/webhook
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              memory: 512Mi
           env:
             - name: SYSTEM_NAMESPACE
               valueFrom:
