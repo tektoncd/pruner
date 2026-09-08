@@ -1,0 +1,86 @@
+---
+name: Merge Readiness Check
+# This workflow provides a required status check that only passes
+# when both 'lgtm' and 'approved' labels are present on the PR
+# This enables auto-merge with GitHub merge queue
+
+'on':
+  pull_request:
+    types:
+      - opened
+      - reopened
+      - synchronize
+      - labeled
+      - unlabeled
+
+permissions:
+  contents: read
+  pull-requests: read
+  statuses: write
+  checks: write
+
+jobs:
+  check_merge_readiness:
+    name: Check approval labels
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check for required labels and blocking labels
+        id: check_labels
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea  # v7.0.1
+        with:
+          script: |
+            const pr = context.payload.pull_request;
+            const labels = pr.labels.map(label => label.name);
+
+            console.log('PR Labels:', labels);
+
+            // Required labels
+            const hasLgtm = labels.includes('lgtm');
+            const hasApproved = labels.includes('approved');
+
+            console.log('Has lgtm:', hasLgtm);
+            console.log('Has approved:', hasApproved);
+
+            // Blocking labels that prevent merge
+            const blockingLabels = [
+              'do-not-merge/hold',
+              'do-not-merge/invalid-owners-file',
+              'do-not-merge/release-note-label-needed',
+              'do-not-merge/requires-unreleased-pipelines',
+              'do-not-merge/work-in-progress',
+              'needs-ok-to-test',
+              'needs-rebase'
+            ];
+
+            const presentBlockingLabels = labels.filter(label => blockingLabels.includes(label));
+
+            if (presentBlockingLabels.length > 0) {
+              console.log('❌ PR has blocking labels:', presentBlockingLabels.join(', '));
+              core.setOutput('ready', 'false');
+              core.setOutput('message', `PR is blocked by labels: ${presentBlockingLabels.join(', ')}`);
+            } else if (hasLgtm && hasApproved) {
+              console.log('✅ PR has both lgtm and approved labels and no blocking labels');
+              core.setOutput('ready', 'true');
+              core.setOutput('message', 'PR is ready to merge - both lgtm and approved labels are present, no blocking labels');
+            } else {
+              const missing = [];
+              if (!hasLgtm) missing.push('lgtm');
+              if (!hasApproved) missing.push('approved');
+
+              console.log('❌ PR is missing required labels:', missing.join(', '));
+              core.setOutput('ready', 'false');
+              core.setOutput('message', `PR is not ready to merge - missing labels: ${missing.join(', ')}`);
+            }
+
+      - name: Set success status
+        if: steps.check_labels.outputs.ready == 'true'
+        run: |
+          echo "✅ ${{ steps.check_labels.outputs.message }}"
+          exit 0
+
+      - name: Set failure status
+        if: steps.check_labels.outputs.ready == 'false'
+        run: |
+          echo "❌ ${{ steps.check_labels.outputs.message }}"
+          exit 1
