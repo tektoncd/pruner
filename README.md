@@ -14,6 +14,7 @@ cascade:
 
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://github.com/tektoncd/pruner/blob/main/LICENSE)
 [![Go Coverage](https://github.com/tektoncd/pruner/actions/workflows/go-coverage.yaml/badge.svg)](https://github.com/tektoncd/pruner/actions/workflows/go-coverage.yaml)
+[![FOSSA Status](https://app.fossa.com/api/projects/git%2Bgithub.com%2Ftektoncd%2Fpruner.svg?type=shield)](https://app.fossa.com/projects/git%2Bgithub.com%2Ftektoncd%2Fpruner?ref=badge_shield)
 
 Tekton Pruner manages the lifecycle of Tekton resources by automatically cleaning up completed PipelineRuns and TaskRuns based on configurable time-based (TTL) and history-based policies.
 
@@ -170,3 +171,5 @@ data:
 ## License
 
 Apache License 2.0 - See [LICENSE](LICENSE) for details
+
+[![FOSSA Status](https://app.fossa.com/api/projects/git%2Bgithub.com%2Ftektoncd%2Fpruner.svg?type=large)](https://app.fossa.com/projects/git%2Bgithub.com%2Ftektoncd%2Fpruner?ref=badge_large)
