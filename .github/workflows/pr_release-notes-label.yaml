@@ -1,0 +1,227 @@
+---
+name: Release Notes Label Check
+# Checks for release-note label and blocks merge if missing
+# Replaces Prow release-note plugin
+
+'on':
+  pull_request_target:
+    types:
+      - opened
+      - reopened
+      - synchronize
+      - labeled
+      - unlabeled
+  issue_comment:
+    types:
+      - created
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+jobs:
+  handle_comment_command:
+    name: Handle release note comment command
+    runs-on: ubuntu-latest
+    if: github.event_name == 'issue_comment' && github.event.issue.pull_request
+
+    steps:
+      - name: Check if comment contains release note command
+        id: check_command
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea  # v7.0.1
+        with:
+          script: |
+            const comment = context.payload.comment.body.trim();
+            const commands = {
+              '/release-note-none': 'release-note-none',
+              '/release-note': 'release-note',
+              '/release-note-action-required': 'release-note-action-required'
+            };
+
+            for (const [cmd, label] of Object.entries(commands)) {
+              if (comment === cmd) {
+                core.setOutput('has_command', 'true');
+                core.setOutput('label', label);
+                return;
+              }
+            }
+            core.setOutput('has_command', 'false');
+
+      - name: Check permissions
+        id: check_permissions
+        if: steps.check_command.outputs.has_command == 'true'
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea  # v7.0.1
+        with:
+          script: |
+            const commenter = context.payload.comment.user.login;
+            const prNumber = context.payload.issue.number;
+
+            // Get PR details to check if commenter is the PR author
+            const pr = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: prNumber
+            });
+
+            const isPrAuthor = pr.data.user.login === commenter;
+
+            console.log(`Commenter: ${commenter}, PR Author: ${pr.data.user.login}, Is PR Author: ${isPrAuthor}`);
+
+            // Following Prow's release-note plugin behavior: only PR authors can set release note labels
+            // This ensures the PR author takes responsibility for documenting their changes
+            if (!isPrAuthor) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: prNumber,
+                body: `@${commenter} only the PR author (@${pr.data.user.login}) can set release note labels. This ensures the author takes responsibility for documenting their changes.`
+              });
+              await github.rest.reactions.createForIssueComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: context.payload.comment.id,
+                content: 'confused'
+              });
+              core.setFailed('Only PR author can use release note commands');
+            }
+
+            core.setOutput('has_permission', isPrAuthor);
+
+      - name: Apply release note label
+        if: steps.check_command.outputs.has_command == 'true' && steps.check_permissions.outputs.has_permission == 'true'
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea  # v7.0.1
+        with:
+          script: |
+            const prNumber = context.payload.issue.number;
+            const labelToAdd = '${{ steps.check_command.outputs.label }}';
+
+            // All possible release note labels
+            const releaseNoteLabels = [
+              'release-note',
+              'release-note-action-required',
+              'release-note-none'
+            ];
+
+            // Get current labels
+            const { data: currentLabels } = await github.rest.issues.listLabelsOnIssue({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: prNumber
+            });
+
+            const currentLabelNames = currentLabels.map(label => label.name);
+
+            // Remove other release note labels
+            for (const label of releaseNoteLabels) {
+              if (label !== labelToAdd && currentLabelNames.includes(label)) {
+                await github.rest.issues.removeLabel({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: prNumber,
+                  name: label
+                });
+              }
+            }
+
+            // Add the new label
+            await github.rest.issues.addLabels({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: prNumber,
+              labels: [labelToAdd]
+            });
+
+            // Remove blocking label if present
+            if (currentLabelNames.includes('do-not-merge/release-note-label-needed')) {
+              await github.rest.issues.removeLabel({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: prNumber,
+                name: 'do-not-merge/release-note-label-needed'
+              });
+            }
+
+            // React to the comment
+            await github.rest.reactions.createForIssueComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              comment_id: context.payload.comment.id,
+              content: '+1'
+            });
+
+  check_release_note:
+    name: Check release note label
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+
+    steps:
+      - name: Check for release note labels
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea  # v7.0.1
+        with:
+          script: |
+            const pr = context.payload.pull_request;
+            const labels = pr.labels.map(label => label.name);
+
+            console.log('PR labels:', labels);
+
+            // Valid release note labels
+            const releaseNoteLabels = [
+              'release-note',
+              'release-note-action-required',
+              'release-note-none'
+            ];
+
+            const hasReleaseNoteLabel = labels.some(label => releaseNoteLabels.includes(label));
+            const hasBlockingLabel = labels.includes('do-not-merge/release-note-label-needed');
+
+            console.log('Has release note label:', hasReleaseNoteLabel);
+            console.log('Has blocking label:', hasBlockingLabel);
+
+            if (!hasReleaseNoteLabel && !hasBlockingLabel) {
+              // Add blocking label
+              console.log('Adding do-not-merge/release-note-label-needed label');
+              await github.rest.issues.addLabels({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: pr.number,
+                labels: ['do-not-merge/release-note-label-needed']
+              });
+
+              // Add a comment explaining what's needed
+              const commentBody = [
+                'This PR is missing a release note label. Please add one of the following labels:',
+                '- `release-note` - This PR has user-facing changes that should be in release notes',
+                '- `release-note-action-required` - This PR requires action from users',
+                '- `release-note-none` - This PR has no user-facing changes',
+                '',
+                'Alternatively, you can comment with one of these commands:',
+                '- `/release-note`',
+                '- `/release-note-action-required`',
+                '- `/release-note-none`',
+                '',
+                'The `do-not-merge/release-note-label-needed` label will be automatically removed once a release note label is added.'
+              ].join('\n');
+
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: pr.number,
+                body: commentBody
+              });
+            } else if (hasReleaseNoteLabel && hasBlockingLabel) {
+              // Remove blocking label
+              console.log('Removing do-not-merge/release-note-label-needed label');
+              try {
+                await github.rest.issues.removeLabel({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: pr.number,
+                  name: 'do-not-merge/release-note-label-needed'
+                });
+              } catch (error) {
+                console.log('Label not found or already removed:', error.message);
+              }
+            } else {
+              console.log('No label change needed');
+            }
