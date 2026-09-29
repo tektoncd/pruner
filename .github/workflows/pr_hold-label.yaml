@@ -1,0 +1,131 @@
+---
+name: Hold Label Management
+# Handles /hold and /unhold commands to block/unblock PRs from merging
+# Replaces Prow hold plugin
+
+'on':
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+jobs:
+  handle_hold_command:
+    name: Process hold commands
+    if: github.event.issue.pull_request
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Process hold commands
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea  # v7.0.1
+        with:
+          script: |
+            const comment_body = context.payload.comment.body.trim();
+            const commenter = context.payload.comment.user.login;
+
+            // Check if comment is a hold command
+            const isHoldCommand = comment_body === '/hold';
+            const isUnholdCommand = comment_body === '/unhold' || comment_body === '/hold cancel';
+
+            if (!isHoldCommand && !isUnholdCommand) {
+              console.log('Not a hold command, skipping');
+              return;
+            }
+
+            console.log(`Processing hold command from ${commenter}: ${comment_body}`);
+
+            // React with eyes to show we're processing
+            await github.rest.reactions.createForIssueComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              comment_id: context.payload.comment.id,
+              content: 'eyes'
+            });
+
+            // Check user permissions
+            let hasPermission = false;
+            try {
+              const { data: collaborator } = await github.rest.repos.getCollaboratorPermissionLevel({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                username: commenter
+              });
+
+              console.log(`User ${commenter} has permission: ${collaborator.permission}`);
+              hasPermission = ['admin', 'write', 'maintain'].includes(collaborator.permission);
+            } catch (error) {
+              console.log(`Error checking permissions for ${commenter}:`, error.message);
+              hasPermission = false;
+            }
+
+            // Allow PR author to hold their own PR
+            const pr = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.issue.number
+            });
+
+            const isPrAuthor = pr.data.user.login === commenter;
+
+            if (!hasPermission && !isPrAuthor) {
+              console.log(`User ${commenter} does not have sufficient permissions and is not the PR author`);
+
+              await github.rest.reactions.createForIssueComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: context.payload.comment.id,
+                content: 'confused'
+              });
+
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body: `@${commenter} you don't have permission to use hold commands. Only the PR author or users with write access can hold/unhold PRs.`
+              });
+
+              return;
+            }
+
+            // Process /hold command
+            if (isHoldCommand) {
+              await github.rest.issues.addLabels({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                labels: ['do-not-merge/hold']
+              });
+              console.log('Added do-not-merge/hold label');
+
+              await github.rest.reactions.createForIssueComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: context.payload.comment.id,
+                content: '+1'
+              });
+            }
+
+            // Process /unhold command
+            if (isUnholdCommand) {
+              try {
+                await github.rest.issues.removeLabel({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: context.issue.number,
+                  name: 'do-not-merge/hold'
+                });
+                console.log('Removed do-not-merge/hold label');
+
+                await github.rest.reactions.createForIssueComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  comment_id: context.payload.comment.id,
+                  content: '+1'
+                });
+              } catch (error) {
+                console.log('Label do-not-merge/hold not found or already removed:', error.message);
+              }
+            }
