@@ -211,6 +211,10 @@ func TestReconciler_ProcessPipelineRun(t *testing.T) {
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      config.PrunerConfigMapName,
 					Namespace: "tekton-pipelines",
+					Labels: map[string]string{
+						config.LabelPartOf:     config.LabelPartOfValue,
+						config.LabelConfigType: config.LabelConfigTypeGlobal,
+					},
 				},
 				Data: map[string]string{
 					"global-config": fmt.Sprintf(`

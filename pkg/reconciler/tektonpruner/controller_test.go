@@ -69,6 +69,10 @@ failedHistoryLimit: 2`,
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      config.PrunerConfigMapName,
 					Namespace: "tekton-pipelines",
+					Labels: map[string]string{
+						config.LabelPartOf:     config.LabelPartOfValue,
+						config.LabelConfigType: config.LabelConfigTypeGlobal,
+					},
 				},
 				Data: tt.configMapData,
 			}
@@ -163,6 +167,10 @@ func TestSafeRunGarbageCollector(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      config.PrunerConfigMapName,
 			Namespace: system.Namespace(),
+			Labels: map[string]string{
+				config.LabelPartOf:     config.LabelPartOfValue,
+				config.LabelConfigType: config.LabelConfigTypeGlobal,
+			},
 		},
 		Data: map[string]string{
 			"global-config": `enforcedConfigLevel: global
