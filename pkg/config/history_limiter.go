@@ -345,10 +345,10 @@ func (hl *HistoryLimiter) doResourceCleanup(ctx context.Context, resource metav1
 		return err
 	}
 
-	// Filter resources by status (success/failed)
+	// Filter by status and exclude children reclaimed with their PipelineRun.
 	resourcesFiltered := []metav1.Object{}
 	for _, res := range resources {
-		if getResourceFilterFn(res) && !isPipelineRunOwned(res) {
+		if getResourceFilterFn(res) && !IsPipelineRunOwned(res) {
 			resourcesFiltered = append(resourcesFiltered, res)
 		}
 	}
@@ -421,20 +421,4 @@ func (hl *HistoryLimiter) doResourceCleanup(ctx context.Context, resource metav1
 	}
 
 	return nil
-}
-
-// isPipelineRunOwned reports whether a resource belongs to a PipelineRun and
-// therefore must be reclaimed with its parent instead of by history limiting.
-func isPipelineRunOwned(resource metav1.Object) bool {
-	if labels := resource.GetLabels(); labels != nil && labels[LabelPipelineRunName] != "" {
-		return true
-	}
-
-	for _, ownerReference := range resource.GetOwnerReferences() {
-		if ownerReference.Kind == KindPipelineRun {
-			return true
-		}
-	}
-
-	return false
 }
