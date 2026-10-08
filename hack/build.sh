@@ -22,6 +22,10 @@ ko resolve \
   --tags="v${VERSION}" \
   --base-import-paths \
   --sbom=none \
+  --image-label="org.opencontainers.image.source=https://$(params.package)" \
+  --image-label="org.opencontainers.image.url=https://$(params.package)" \
+  --image-label="org.opencontainers.image.title=pruner" \
+  --image-label="org.opencontainers.image.description=Tekton\ Pruner" \
   > ${BUILDS_DIR}/release-v${VERSION}.yaml
 
 # replace version tags in the manifests
