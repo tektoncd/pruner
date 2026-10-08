@@ -12,6 +12,23 @@ import (
 	logtesting "knative.dev/pkg/logging/testing"
 )
 
+// newTestConfigMap creates a ConfigMap with required pruner labels for testing
+func newTestConfigMap(namespace, configData string) *corev1.ConfigMap {
+	return &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      config.PrunerNamespaceConfigMapName,
+			Namespace: namespace,
+			Labels: map[string]string{
+				config.LabelPartOf:     config.LabelPartOfValue,
+				config.LabelConfigType: config.LabelConfigTypeNamespace,
+			},
+		},
+		Data: map[string]string{
+			config.PrunerNamespaceConfigKey: configData,
+		},
+	}
+}
+
 func TestReconcile_ConfigMapCreated(t *testing.T) {
 	// a fake Kubernetes client
 	kubeClient := fake.NewSimpleClientset()
@@ -22,19 +39,11 @@ func TestReconcile_ConfigMapCreated(t *testing.T) {
 
 	// Create a test ConfigMap with namespace-level config
 	testNamespace := "test-namespace"
-	testConfigMap := &corev1.ConfigMap{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      config.PrunerNamespaceConfigMapName,
-			Namespace: testNamespace,
-		},
-		Data: map[string]string{
-			config.PrunerNamespaceConfigKey: `
+	testConfigMap := newTestConfigMap(testNamespace, `
 ttlSecondsAfterFinished: 60
 successfulHistoryLimit: 5
 failedHistoryLimit: 10
-`,
-		},
-	}
+`)
 
 	// Create the ConfigMap in the fake cluster
 	_, err := kubeClient.CoreV1().ConfigMaps(testNamespace).Create(ctx, testConfigMap, metav1.CreateOptions{})

@@ -93,6 +93,23 @@ const (
 	// used to fetch the namespace-level pruner configuration data
 	PrunerNamespaceConfigKey = "ns-config"
 
+	// LabelPartOf represents the standard Kubernetes app.kubernetes.io/part-of label
+	// used to identify resources belonging to the tekton-pruner system
+	LabelPartOf = "app.kubernetes.io/part-of"
+
+	// LabelPartOfValue represents the expected value for the part-of label
+	LabelPartOfValue = "tekton-pruner"
+
+	// LabelConfigType represents the label key that identifies the type of pruner configuration
+	// Valid values are "global" or "namespace"
+	LabelConfigType = "pruner.tekton.dev/config-type"
+
+	// LabelConfigTypeGlobal represents the config-type label value for global configurations
+	LabelConfigTypeGlobal = "global"
+
+	// LabelConfigTypeNamespace represents the config-type label value for namespace configurations
+	LabelConfigTypeNamespace = "namespace"
+
 	// DefaultTTLConcurrentWorkersPipelineRun represents
 	// number of workers in the PipelineRun controller
 	DefaultTTLConcurrentWorkersPipelineRun = int(5)

@@ -48,31 +48,6 @@ var _ controller.Reconciler = (*ValidateConfigMap)(nil)
 // ThisTypeDoesNotDependOnInformerState implements StatelessAdmissionController
 func (v *ValidateConfigMap) ThisTypeDoesNotDependOnInformerState() {}
 
-// validateRequiredLabels checks if the ConfigMap has the required labels for pruner configs
-func validateRequiredLabels(cm *corev1.ConfigMap) error {
-	if cm.Labels == nil {
-		return fmt.Errorf("ConfigMap must have labels")
-	}
-
-	// Check for required label: app.kubernetes.io/part-of=tekton-pruner
-	if partOf, ok := cm.Labels["app.kubernetes.io/part-of"]; !ok || partOf != "tekton-pruner" {
-		return fmt.Errorf("ConfigMap must have label app.kubernetes.io/part-of=tekton-pruner")
-	}
-
-	// Check for config-type label
-	configType, ok := cm.Labels["pruner.tekton.dev/config-type"]
-	if !ok {
-		return fmt.Errorf("ConfigMap must have label pruner.tekton.dev/config-type (global or namespace)")
-	}
-
-	// Validate config-type value
-	if configType != "global" && configType != "namespace" {
-		return fmt.Errorf("label pruner.tekton.dev/config-type must be 'global' or 'namespace', got: %s", configType)
-	}
-
-	return nil
-}
-
 // validateNamespaceForConfig checks if a namespace is allowed for namespace-level configs
 // Forbidden namespaces: kube-*, openshift-*, tekton-pipelines, tekton-operator
 func validateNamespaceForConfig(namespace string) error {
@@ -171,46 +146,31 @@ func (v *ValidateConfigMap) Admit(ctx context.Context, request *admissionv1.Admi
 		}
 	}
 
-	// Validate that ConfigMap has required labels
 	// The webhook objectSelector ensures only ConfigMaps with proper labels reach this point
-	// This is a defense-in-depth check
-	if err := validateRequiredLabels(&cm); err != nil {
-		logger.Warnw("ConfigMap missing required labels", "name", cm.Name, "namespace", cm.Namespace, "error", err)
+	// We can safely read the config-type label without validation
+	configType := cm.Labels[config.LabelConfigType]
+	isGlobalConfig := configType == config.LabelConfigTypeGlobal && cm.Namespace == system.Namespace()
+	isNamespaceConfig := configType == config.LabelConfigTypeNamespace && cm.Namespace != system.Namespace()
+
+	// Validate ConfigMap names match expected patterns (use constants)
+	if isGlobalConfig && cm.Name != config.PrunerConfigMapName {
 		return &admissionv1.AdmissionResponse{
 			Allowed: false,
 			Result: &metav1.Status{
 				Status:  metav1.StatusFailure,
-				Message: fmt.Sprintf("Invalid pruner ConfigMap labels: %v", err),
+				Message: fmt.Sprintf("Global config must be named '%s', got: %s", config.PrunerConfigMapName, cm.Name),
 				Reason:  metav1.StatusReasonInvalid,
 				Code:    400,
 			},
 		}
 	}
 
-	// Determine config type from labels
-	configType := cm.Labels["pruner.tekton.dev/config-type"]
-	isGlobalConfig := configType == "global" && cm.Namespace == system.Namespace()
-	isNamespaceConfig := configType == "namespace" && cm.Namespace != system.Namespace()
-
-	// Validate ConfigMap names match expected patterns
-	if isGlobalConfig && cm.Name != "tekton-pruner-default-spec" {
+	if isNamespaceConfig && cm.Name != config.PrunerNamespaceConfigMapName {
 		return &admissionv1.AdmissionResponse{
 			Allowed: false,
 			Result: &metav1.Status{
 				Status:  metav1.StatusFailure,
-				Message: fmt.Sprintf("Global config must be named 'tekton-pruner-default-spec', got: %s", cm.Name),
-				Reason:  metav1.StatusReasonInvalid,
-				Code:    400,
-			},
-		}
-	}
-
-	if isNamespaceConfig && cm.Name != "tekton-pruner-namespace-spec" {
-		return &admissionv1.AdmissionResponse{
-			Allowed: false,
-			Result: &metav1.Status{
-				Status:  metav1.StatusFailure,
-				Message: fmt.Sprintf("Namespace config must be named 'tekton-pruner-namespace-spec', got: %s", cm.Name),
+				Message: fmt.Sprintf("Namespace config must be named '%s', got: %s", config.PrunerNamespaceConfigMapName, cm.Name),
 				Reason:  metav1.StatusReasonInvalid,
 				Code:    400,
 			},

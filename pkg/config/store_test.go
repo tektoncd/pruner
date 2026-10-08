@@ -69,8 +69,15 @@ namespaces:
 		t.Run(tt.name, func(t *testing.T) {
 			ps := &prunerConfigStore{namespaceConfig: make(map[string]NamespaceSpec)}
 			cm := &corev1.ConfigMap{
-				ObjectMeta: metav1.ObjectMeta{Name: "test", Namespace: "test"},
-				Data:       map[string]string{PrunerGlobalConfigKey: tt.configData},
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test",
+					Namespace: "test",
+					Labels: map[string]string{
+						LabelPartOf:     LabelPartOfValue,
+						LabelConfigType: LabelConfigTypeGlobal,
+					},
+				},
+				Data: map[string]string{PrunerGlobalConfigKey: tt.configData},
 			}
 
 			err := ps.LoadGlobalConfig(context.Background(), cm)
@@ -132,8 +139,15 @@ taskRuns:
 		t.Run(tt.name, func(t *testing.T) {
 			ps := &prunerConfigStore{namespaceConfig: make(map[string]NamespaceSpec)}
 			cm := &corev1.ConfigMap{
-				ObjectMeta: metav1.ObjectMeta{Name: "test", Namespace: tt.namespace},
-				Data:       map[string]string{PrunerNamespaceConfigKey: tt.configData},
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test",
+					Namespace: tt.namespace,
+					Labels: map[string]string{
+						LabelPartOf:     LabelPartOfValue,
+						LabelConfigType: LabelConfigTypeNamespace,
+					},
+				},
+				Data: map[string]string{PrunerNamespaceConfigKey: tt.configData},
 			}
 
 			err := ps.LoadNamespaceConfig(context.Background(), tt.namespace, cm)
@@ -144,6 +158,139 @@ taskRuns:
 				assert.NoError(t, err)
 				_, exists := ps.namespaceConfig[tt.namespace]
 				assert.True(t, exists)
+			}
+		})
+	}
+}
+
+// TestLoadConfigRejectsUnlabeledConfigMaps verifies that ConfigMaps without required labels are rejected.
+// This is a regression test for the vulnerability where unlabeled ConfigMaps bypassed webhook validation.
+func TestLoadConfigRejectsUnlabeledConfigMaps(t *testing.T) {
+	tests := []struct {
+		name           string
+		configMapName  string
+		namespace      string
+		labels         map[string]string
+		loadFunc       string // "global" or "namespace"
+		expectError    bool
+		errorSubstring string
+	}{
+		{
+			name:           "Namespace config without any labels",
+			configMapName:  PrunerNamespaceConfigMapName,
+			namespace:      "test-ns",
+			labels:         nil,
+			loadFunc:       "namespace",
+			expectError:    true,
+			errorSubstring: "ConfigMap must have labels",
+		},
+		{
+			name:          "Namespace config without part-of label",
+			configMapName: PrunerNamespaceConfigMapName,
+			namespace:     "test-ns",
+			labels: map[string]string{
+				LabelConfigType: LabelConfigTypeNamespace,
+			},
+			loadFunc:       "namespace",
+			expectError:    true,
+			errorSubstring: "must have label app.kubernetes.io/part-of",
+		},
+		{
+			name:          "Namespace config without config-type label",
+			configMapName: PrunerNamespaceConfigMapName,
+			namespace:     "test-ns",
+			labels: map[string]string{
+				LabelPartOf: LabelPartOfValue,
+			},
+			loadFunc:       "namespace",
+			expectError:    true,
+			errorSubstring: "must have label pruner.tekton.dev/config-type",
+		},
+		{
+			name:          "Namespace config with wrong config-type label",
+			configMapName: PrunerNamespaceConfigMapName,
+			namespace:     "test-ns",
+			labels: map[string]string{
+				LabelPartOf:     LabelPartOfValue,
+				LabelConfigType: LabelConfigTypeGlobal, // Wrong type!
+			},
+			loadFunc:       "namespace",
+			expectError:    true,
+			errorSubstring: "expected 'namespace', got 'global'",
+		},
+		{
+			name:           "Global config without any labels",
+			configMapName:  PrunerConfigMapName,
+			namespace:      "tekton-pipelines",
+			labels:         nil,
+			loadFunc:       "global",
+			expectError:    true,
+			errorSubstring: "ConfigMap must have labels",
+		},
+		{
+			name:          "Global config with wrong config-type label",
+			configMapName: PrunerConfigMapName,
+			namespace:     "tekton-pipelines",
+			labels: map[string]string{
+				LabelPartOf:     LabelPartOfValue,
+				LabelConfigType: LabelConfigTypeNamespace, // Wrong type!
+			},
+			loadFunc:       "global",
+			expectError:    true,
+			errorSubstring: "expected 'global', got 'namespace'",
+		},
+		{
+			name:          "Namespace config with correct labels succeeds",
+			configMapName: PrunerNamespaceConfigMapName,
+			namespace:     "test-ns",
+			labels: map[string]string{
+				LabelPartOf:     LabelPartOfValue,
+				LabelConfigType: LabelConfigTypeNamespace,
+			},
+			loadFunc:    "namespace",
+			expectError: false,
+		},
+		{
+			name:          "Global config with correct labels succeeds",
+			configMapName: PrunerConfigMapName,
+			namespace:     "tekton-pipelines",
+			labels: map[string]string{
+				LabelPartOf:     LabelPartOfValue,
+				LabelConfigType: LabelConfigTypeGlobal,
+			},
+			loadFunc:    "global",
+			expectError: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ps := &prunerConfigStore{namespaceConfig: make(map[string]NamespaceSpec)}
+			cm := &corev1.ConfigMap{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      tt.configMapName,
+					Namespace: tt.namespace,
+					Labels:    tt.labels,
+				},
+				Data: map[string]string{},
+			}
+
+			var err error
+			if tt.loadFunc == "global" {
+				cm.Data[PrunerGlobalConfigKey] = "ttlSecondsAfterFinished: 3600"
+				err = ps.LoadGlobalConfig(context.Background(), cm)
+			} else {
+				cm.Data[PrunerNamespaceConfigKey] = "ttlSecondsAfterFinished: 1800"
+				err = ps.LoadNamespaceConfig(context.Background(), tt.namespace, cm)
+			}
+
+			if tt.expectError {
+				assert.Error(t, err)
+				if tt.errorSubstring != "" {
+					assert.Contains(t, err.Error(), tt.errorSubstring)
+				}
+			} else {
+				assert.NoError(t, err)
 			}
 		})
 	}
