@@ -1,0 +1,239 @@
+---
+name: Approval Label Management
+# This workflow handles /lgtm and /approve commands in PR comments
+# Replaces Prow Tide functionality for label-based approvals
+
+'on':
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+jobs:
+  handle_approval_commands:
+    name: Process approval commands
+    # Only run on pull request comments
+    if: github.event.issue.pull_request
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Process approval commands
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea  # v7.0.1
+        with:
+          script: |
+            const comment_body = context.payload.comment.body.trim();
+            const commenter = context.payload.comment.user.login;
+
+            // Check if comment is an approval command
+            const isLgtmCommand = comment_body.startsWith('/lgtm');
+            const isApproveCommand = comment_body.startsWith('/approve');
+
+            if (!isLgtmCommand && !isApproveCommand) {
+              console.log('Not an approval command, skipping');
+              return;
+            }
+
+            console.log(`Processing command from ${commenter}: ${comment_body}`);
+
+            // React with eyes to show we're processing
+            await github.rest.reactions.createForIssueComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              comment_id: context.payload.comment.id,
+              content: 'eyes'
+            });
+
+            // Check user permissions
+            let hasPermission = false;
+            try {
+              const { data: collaborator } = await github.rest.repos.getCollaboratorPermissionLevel({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                username: commenter
+              });
+
+              console.log(`User ${commenter} has permission: ${collaborator.permission}`);
+              hasPermission = ['admin', 'write', 'maintain'].includes(collaborator.permission);
+            } catch (error) {
+              console.log(`Error checking permissions for ${commenter}:`, error.message);
+              hasPermission = false;
+            }
+
+            // Handle insufficient permissions
+            if (!hasPermission) {
+              console.log(`User ${commenter} does not have sufficient permissions`);
+
+              await github.rest.reactions.createForIssueComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: context.payload.comment.id,
+                content: 'confused'
+              });
+
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body: `@${commenter} you don't have permission to use approval commands. Only users with write access or higher can approve PRs.`
+              });
+
+              return;
+            }
+
+            // Get PR details to check author and co-authors
+            const { data: pr } = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.issue.number
+            });
+
+            const prAuthor = pr.user.login;
+
+            // Extract co-authors from commit messages and PR body
+            const coAuthors = new Set();
+
+            // Check PR body for co-authored-by
+            const prBody = pr.body || '';
+            const coAuthorMatches = prBody.matchAll(/(?:co-authored-by|Co-authored-by|CO-AUTHORED-BY):\s*([^<]+)\s*<([^>]+)>/gi);
+            for (const match of coAuthorMatches) {
+              // Extract username from email or name
+              const email = match[2].toLowerCase();
+              const username = email.split('@')[0].replace(/[^a-z0-9-]/g, '');
+              coAuthors.add(username);
+            }
+
+            // Check commits for co-authors
+            const { data: commits } = await github.rest.pulls.listCommits({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.issue.number
+            });
+
+            for (const commit of commits) {
+              const message = commit.commit.message;
+              const commitCoAuthorMatches = message.matchAll(/(?:co-authored-by|Co-authored-by|CO-AUTHORED-BY):\s*([^<]+)\s*<([^>]+)>/gi);
+              for (const match of commitCoAuthorMatches) {
+                const email = match[2].toLowerCase();
+                const username = email.split('@')[0].replace(/[^a-z0-9-]/g, '');
+                coAuthors.add(username);
+              }
+
+              // Add commit author as co-author if different from PR author
+              if (commit.author && commit.author.login && commit.author.login !== prAuthor) {
+                coAuthors.add(commit.author.login.toLowerCase());
+              }
+            }
+
+            console.log(`PR author: ${prAuthor}`);
+            console.log(`Co-authors: ${Array.from(coAuthors).join(', ')}`);
+            console.log(`Commenter: ${commenter}`);
+
+            // Check if commenter is the PR author or co-author
+            const isAuthor = commenter.toLowerCase() === prAuthor.toLowerCase();
+            const isCoAuthor = coAuthors.has(commenter.toLowerCase());
+
+            if (isAuthor || isCoAuthor) {
+              console.log(`User ${commenter} is the PR author or co-author and cannot approve their own PR`);
+
+              await github.rest.reactions.createForIssueComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: context.payload.comment.id,
+                content: 'confused'
+              });
+
+              const role = isAuthor ? 'author' : 'co-author';
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body: `@${commenter} as the PR ${role}, you cannot approve your own pull request. Please ask another maintainer to review and approve.`
+              });
+
+              return;
+            }
+
+            // Process /lgtm command
+            if (isLgtmCommand) {
+              const isCancel = comment_body === '/lgtm cancel';
+
+              if (isCancel) {
+                try {
+                  await github.rest.issues.removeLabel({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    issue_number: context.issue.number,
+                    name: 'lgtm'
+                  });
+                  console.log('Removed lgtm label');
+
+                  await github.rest.reactions.createForIssueComment({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    comment_id: context.payload.comment.id,
+                    content: '-1'
+                  });
+                } catch (error) {
+                  console.log('Label lgtm not found or already removed:', error.message);
+                }
+              } else if (comment_body === '/lgtm') {
+                await github.rest.issues.addLabels({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: context.issue.number,
+                  labels: ['lgtm']
+                });
+                console.log('Added lgtm label');
+
+                await github.rest.reactions.createForIssueComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  comment_id: context.payload.comment.id,
+                  content: '+1'
+                });
+              }
+            }
+
+            // Process /approve command
+            if (isApproveCommand) {
+              const isCancel = comment_body === '/approve cancel';
+
+              if (isCancel) {
+                try {
+                  await github.rest.issues.removeLabel({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    issue_number: context.issue.number,
+                    name: 'approved'
+                  });
+                  console.log('Removed approved label');
+
+                  await github.rest.reactions.createForIssueComment({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    comment_id: context.payload.comment.id,
+                    content: '-1'
+                  });
+                } catch (error) {
+                  console.log('Label approved not found or already removed:', error.message);
+                }
+              } else if (comment_body === '/approve') {
+                await github.rest.issues.addLabels({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: context.issue.number,
+                  labels: ['approved']
+                });
+                console.log('Added approved label');
+
+                await github.rest.reactions.createForIssueComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  comment_id: context.payload.comment.id,
+                  content: '+1'
+                });
+              }
+            }
