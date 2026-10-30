@@ -122,11 +122,52 @@ var (
 	}
 )
 
+// ValidateConfigMapLabels ensures ConfigMaps have required labels to prevent bypass of webhook validation.
+func ValidateConfigMapLabels(cm *corev1.ConfigMap, expectedConfigType string) error {
+	if cm.Labels == nil {
+		return fmt.Errorf("ConfigMap must have labels")
+	}
+
+	// Verify app.kubernetes.io/part-of=tekton-pruner
+	partOf, hasPartOf := cm.Labels[LabelPartOf]
+	if !hasPartOf || partOf != LabelPartOfValue {
+		return fmt.Errorf("ConfigMap must have label %s=%s", LabelPartOf, LabelPartOfValue)
+	}
+
+	// Verify pruner.tekton.dev/config-type
+	configType, hasConfigType := cm.Labels[LabelConfigType]
+	if !hasConfigType {
+		return fmt.Errorf("ConfigMap must have label %s (%s or %s)",
+			LabelConfigType, LabelConfigTypeGlobal, LabelConfigTypeNamespace)
+	}
+
+	// Validate config-type value
+	if configType != LabelConfigTypeGlobal && configType != LabelConfigTypeNamespace {
+		return fmt.Errorf("label %s must be '%s' or '%s', got: %s",
+			LabelConfigType, LabelConfigTypeGlobal, LabelConfigTypeNamespace, configType)
+	}
+
+	// If specific type expected, validate exact match
+	if expectedConfigType != "" && configType != expectedConfigType {
+		return fmt.Errorf("ConfigMap has incorrect %s label: expected '%s', got '%s'",
+			LabelConfigType, expectedConfigType, configType)
+	}
+
+	return nil
+}
+
 // loads config from configMap (global-config) should be called on startup and if there is a change detected on the ConfigMap
 func (ps *prunerConfigStore) LoadGlobalConfig(ctx context.Context, configMap *corev1.ConfigMap) error {
 	logger := logging.FromContext(ctx)
 	ps.mutex.Lock()
 	defer ps.mutex.Unlock()
+
+	// Validate required labels (prevents unlabeled ConfigMaps from bypassing webhook)
+	if err := ValidateConfigMapLabels(configMap, LabelConfigTypeGlobal); err != nil {
+		logger.Warnw("Rejecting global ConfigMap with invalid labels", "name", configMap.Name,
+			"namespace", configMap.Namespace, "error", err)
+		return fmt.Errorf("global ConfigMap label validation failed: %w", err)
+	}
 
 	// Log the current state of globalConfig and namespacedConfig before updating
 	logger.Debugw("Loading global config", "oldGlobalConfig", ps.globalConfig)
@@ -156,6 +197,13 @@ func (ps *prunerConfigStore) LoadNamespaceConfig(ctx context.Context, namespace 
 	logger := logging.FromContext(ctx)
 	ps.mutex.Lock()
 	defer ps.mutex.Unlock()
+
+	// Validate required labels (prevents unlabeled ConfigMaps from bypassing webhook)
+	if err := ValidateConfigMapLabels(configMap, LabelConfigTypeNamespace); err != nil {
+		logger.Warnw("Rejecting namespace ConfigMap with invalid labels", "name", configMap.Name,
+			"namespace", configMap.Namespace, "error", err)
+		return fmt.Errorf("namespace ConfigMap label validation failed: %w", err)
+	}
 
 	// Log the current state before updating
 	logger.Debugw("Loading namespace config", "namespace", namespace, "oldConfig", ps.namespaceConfig[namespace])
