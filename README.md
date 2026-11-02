@@ -54,6 +54,10 @@ kubectl apply -f "https://infra.tekton.dev/tekton-releases/pruner/previous/v$VER
 kubectl get pods -n tekton-pipelines -l app=tekton-pruner-controller
 ```
 
+**Resource Limits:**
+
+Default limits based on benchmark data: controller 2Gi memory (supports ~50k runs), webhook 512Mi. CPU limits omitted to avoid throttling. Memory scales linearly: `memory_mb = 23 + (13.6 × runs_in_thousands)`.
+
 ### Important: v0.3.2 Retraction
 
 **Version v0.3.2 has been retracted** from the Go module registry due to it being an unintended release. Users are recommended not to use v0.3.2.

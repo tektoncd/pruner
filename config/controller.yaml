@@ -73,6 +73,12 @@ spec:
           ports:
             - name: metrics
               containerPort: 9090
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              memory: 2Gi
           env:
             - name: SYSTEM_NAMESPACE
               valueFrom:
