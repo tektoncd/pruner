@@ -308,3 +308,129 @@ func TestResourceNeedsCleanup(t *testing.T) {
 		})
 	}
 }
+
+// patchRecordingTTLFuncs returns a configurable TTL and records patch bodies
+type patchRecordingTTLFuncs struct {
+	*mockTTLFuncs
+	patches [][]byte
+}
+
+func (m *patchRecordingTTLFuncs) GetTTLSecondsAfterFinished(_, _ string, _ SelectorSpec) (*int32, string) {
+	return m.ttl, "test"
+}
+
+func (m *patchRecordingTTLFuncs) Patch(_ context.Context, namespace, name string, data []byte) error {
+	if _, ok := m.resources[namespace+"/"+name]; !ok {
+		return errors.NewNotFound(schema.GroupResource{Group: "test", Resource: "mock"}, name)
+	}
+	m.patches = append(m.patches, data)
+	return nil
+}
+
+func TestUpdateAnnotationTTLSecondsPatch(t *testing.T) {
+	tests := []struct {
+		name        string
+		annotations map[string]string
+		ttl         *int32
+		wantPatch   string
+		wantRemoved bool
+	}{
+		{
+			name: "removed config sends null for the annotation",
+			annotations: map[string]string{
+				AnnotationTTLSecondsAfterFinished: "60",
+				"other":                           "kept",
+			},
+			ttl:         nil,
+			wantPatch:   `{"metadata":{"annotations":{"pruner.tekton.dev/ttlSecondsAfterFinished":null}}}`,
+			wantRemoved: true,
+		},
+		{
+			name:        "no config and no annotation sends no patch",
+			annotations: map[string]string{"other": "kept"},
+			ttl:         nil,
+		},
+		{
+			name:        "new config only patches the TTL key",
+			annotations: map[string]string{"other": "kept"},
+			ttl:         ptr.Int32(120),
+			wantPatch:   `{"metadata":{"annotations":{"pruner.tekton.dev/ttlSecondsAfterFinished":"120"}}}`,
+		},
+		{
+			name:        "changed config updates the TTL key",
+			annotations: map[string]string{AnnotationTTLSecondsAfterFinished: "60"},
+			ttl:         ptr.Int32(30),
+			wantPatch:   `{"metadata":{"annotations":{"pruner.tekton.dev/ttlSecondsAfterFinished":"30"}}}`,
+		},
+		{
+			name:        "unchanged config sends no patch",
+			annotations: map[string]string{AnnotationTTLSecondsAfterFinished: "60"},
+			ttl:         ptr.Int32(60),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			funcs := &patchRecordingTTLFuncs{mockTTLFuncs: newMockTTLFuncs()}
+			funcs.ttl = tt.ttl
+			res := &ttlMockResource{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:        "run",
+					Namespace:   "default",
+					Annotations: tt.annotations,
+				},
+			}
+			funcs.resources["default/run"] = res
+			handler, err := NewTTLHandler(clocktest.NewFakeClock(time.Now()), funcs)
+			if err != nil {
+				t.Fatalf("NewTTLHandler() error = %v", err)
+			}
+
+			removed, err := handler.updateAnnotationTTLSeconds(context.Background(), res)
+			if err != nil {
+				t.Fatalf("updateAnnotationTTLSeconds() error = %v", err)
+			}
+			if removed != tt.wantRemoved {
+				t.Errorf("removed = %v, want %v", removed, tt.wantRemoved)
+			}
+			if tt.wantPatch == "" {
+				if len(funcs.patches) != 0 {
+					t.Fatalf("expected no patch, got %s", funcs.patches)
+				}
+				return
+			}
+			if len(funcs.patches) != 1 {
+				t.Fatalf("expected 1 patch, got %d", len(funcs.patches))
+			}
+			if got := string(funcs.patches[0]); got != tt.wantPatch {
+				t.Errorf("patch = %s, want %s", got, tt.wantPatch)
+			}
+		})
+	}
+}
+
+func TestProcessEventKeepsResourceWhenTTLConfigRemoved(t *testing.T) {
+	funcs := &patchRecordingTTLFuncs{mockTTLFuncs: newMockTTLFuncs()}
+	fakeClock := clocktest.NewFakeClock(time.Now())
+	res := &ttlMockResource{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:        "run",
+			Namespace:   "default",
+			Annotations: map[string]string{AnnotationTTLSecondsAfterFinished: "60"},
+		},
+		completed:       true,
+		completion_time: &metav1.Time{Time: fakeClock.Now().Add(-2 * time.Hour)},
+	}
+	funcs.resources["default/run"] = res
+	handler, err := NewTTLHandler(fakeClock, funcs)
+	if err != nil {
+		t.Fatalf("NewTTLHandler() error = %v", err)
+	}
+
+	if err := handler.ProcessEvent(context.Background(), res); err != nil {
+		t.Fatalf("ProcessEvent() error = %v", err)
+	}
+	if _, ok := funcs.resources["default/run"]; !ok {
+		t.Error("resource was deleted using a TTL that is no longer configured")
+	}
+}
