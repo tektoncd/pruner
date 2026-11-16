@@ -2,8 +2,10 @@ package namespaceprunerconfig
 
 import (
 	"context"
+	"time"
 
 	"github.com/tektoncd/pruner/pkg/config"
+	"github.com/tektoncd/pruner/pkg/reconciler/tektonpruner"
 	"go.uber.org/zap"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/client-go/tools/cache"
@@ -25,6 +27,11 @@ func NewController(ctx context.Context, cmw configmap.Watcher) *controller.Impl 
 
 	r := &Reconciler{
 		kubeclient: kubeClient,
+		startTime:  time.Now(),
+		// apply the new limits now instead of waiting for the next completed run
+		onConfigChange: func(namespace string) {
+			go tektonpruner.RunNamespaceGarbageCollector(ctx, namespace)
+		},
 	}
 
 	impl := controller.NewContext(ctx, r, controller.ControllerOptions{
