@@ -23,7 +23,6 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/tektoncd/pruner/pkg/config"
-	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/kubernetes/fake"
@@ -64,13 +63,7 @@ taskRuns:
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			ctx := logging.WithLogger(context.Background(), logtesting.TestLogger(t))
-			cm := &corev1.ConfigMap{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      config.PrunerNamespaceConfigMapName,
-					Namespace: "test-ns",
-				},
-				Data: map[string]string{config.PrunerNamespaceConfigKey: tt.configData},
-			}
+			cm := newTestConfigMap("test-ns", tt.configData)
 
 			reconciler := &Reconciler{kubeclient: fake.NewSimpleClientset(cm)}
 			err := reconciler.Reconcile(ctx, "test-ns/"+config.PrunerNamespaceConfigMapName)
@@ -83,13 +76,7 @@ taskRuns:
 // TestReconcileInvalidConfig verifies error handling for invalid YAML.
 func TestReconcileInvalidConfig(t *testing.T) {
 	ctx := logging.WithLogger(context.Background(), logtesting.TestLogger(t))
-	cm := &corev1.ConfigMap{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      config.PrunerNamespaceConfigMapName,
-			Namespace: "test-ns",
-		},
-		Data: map[string]string{config.PrunerNamespaceConfigKey: "invalid: yaml: ::::"},
-	}
+	cm := newTestConfigMap("test-ns", "invalid: yaml: ::::")
 
 	reconciler := &Reconciler{kubeclient: fake.NewSimpleClientset(cm)}
 	err := reconciler.Reconcile(ctx, "test-ns/"+config.PrunerNamespaceConfigMapName)
@@ -110,13 +97,7 @@ func TestReconcileConfigMapNotFound(t *testing.T) {
 // TestReconcileConfigMapUpdate verifies config updates are processed.
 func TestReconcileConfigMapUpdate(t *testing.T) {
 	ctx := logging.WithLogger(context.Background(), logtesting.TestLogger(t))
-	initialCM := &corev1.ConfigMap{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      config.PrunerNamespaceConfigMapName,
-			Namespace: "test-ns",
-		},
-		Data: map[string]string{config.PrunerNamespaceConfigKey: "ttlSecondsAfterFinished: 3600"},
-	}
+	initialCM := newTestConfigMap("test-ns", "ttlSecondsAfterFinished: 3600")
 
 	kubeClient := fake.NewSimpleClientset(initialCM)
 	reconciler := &Reconciler{kubeclient: kubeClient}
@@ -136,14 +117,8 @@ func TestReconcileConfigMapUpdate(t *testing.T) {
 // TestReconcileMultipleNamespaces verifies independent namespace config handling.
 func TestReconcileMultipleNamespaces(t *testing.T) {
 	ctx := logging.WithLogger(context.Background(), logtesting.TestLogger(t))
-	cm1 := &corev1.ConfigMap{
-		ObjectMeta: metav1.ObjectMeta{Name: config.PrunerNamespaceConfigMapName, Namespace: "ns1"},
-		Data:       map[string]string{config.PrunerNamespaceConfigKey: "ttlSecondsAfterFinished: 1800"},
-	}
-	cm2 := &corev1.ConfigMap{
-		ObjectMeta: metav1.ObjectMeta{Name: config.PrunerNamespaceConfigMapName, Namespace: "ns2"},
-		Data:       map[string]string{config.PrunerNamespaceConfigKey: "ttlSecondsAfterFinished: 3600"},
-	}
+	cm1 := newTestConfigMap("ns1", "ttlSecondsAfterFinished: 1800")
+	cm2 := newTestConfigMap("ns2", "ttlSecondsAfterFinished: 3600")
 
 	reconciler := &Reconciler{kubeclient: fake.NewSimpleClientset(cm1, cm2)}
 
@@ -154,13 +129,7 @@ func TestReconcileMultipleNamespaces(t *testing.T) {
 // TestReconcileEmptyData verifies graceful handling of empty ConfigMap data.
 func TestReconcileEmptyData(t *testing.T) {
 	ctx := logging.WithLogger(context.Background(), logtesting.TestLogger(t))
-	cm := &corev1.ConfigMap{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      config.PrunerNamespaceConfigMapName,
-			Namespace: "test-ns",
-		},
-		Data: map[string]string{},
-	}
+	cm := newTestConfigMap("test-ns", "")
 
 	reconciler := &Reconciler{kubeclient: fake.NewSimpleClientset(cm)}
 	err := reconciler.Reconcile(ctx, "test-ns/"+config.PrunerNamespaceConfigMapName)
@@ -203,13 +172,7 @@ func TestConcurrentReconciliation(t *testing.T) {
 
 	var runtimeObjs []runtime.Object
 	for i := 1; i <= 5; i++ {
-		cm := &corev1.ConfigMap{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      config.PrunerNamespaceConfigMapName,
-				Namespace: fmt.Sprintf("concurrent-ns-%d", i),
-			},
-			Data: map[string]string{config.PrunerNamespaceConfigKey: "ttlSecondsAfterFinished: 3600"},
-		}
+		cm := newTestConfigMap(fmt.Sprintf("concurrent-ns-%d", i), "ttlSecondsAfterFinished: 3600")
 		runtimeObjs = append(runtimeObjs, cm)
 	}
 
