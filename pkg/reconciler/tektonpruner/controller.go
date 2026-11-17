@@ -158,13 +158,39 @@ func getFilteredNamespaces(ctx context.Context, client kubernetes.Interface) ([]
 
 	var filtered []string
 	for _, ns := range nsList.Items {
-		name := ns.Name
-		if !strings.HasPrefix(name, "kube-") && !strings.HasPrefix(name, "openshift-") &&
-			name != "tekton-pipelines" && name != "tekton-operator" {
-			filtered = append(filtered, name)
+		if !isSystemNamespace(ns.Name) {
+			filtered = append(filtered, ns.Name)
 		}
 	}
 	return filtered, nil
+}
+
+// isSystemNamespace reports whether the garbage collector skips the namespace
+func isSystemNamespace(name string) bool {
+	return strings.HasPrefix(name, "kube-") || strings.HasPrefix(name, "openshift-") ||
+		name == "tekton-pipelines" || name == "tekton-operator"
+}
+
+// RunNamespaceGarbageCollector runs the TTL and history limit cleanup for a
+// single namespace, e.g. after its namespace-level pruner config changed. It
+// shares the lock with the cluster-wide garbage collector.
+func RunNamespaceGarbageCollector(ctx context.Context, namespace string) {
+	if isSystemNamespace(namespace) {
+		return
+	}
+	logger := logging.FromContext(ctx)
+
+	gcMutex.Lock()
+	defer gcMutex.Unlock()
+
+	logger.Infow("Running cleanup after namespace config change", "namespace", namespace)
+	updateTime := time.Now().Format(time.RFC3339)
+	if err := cleanupPRs(ctx, namespace, updateTime); err != nil {
+		logger.Errorw("Error collecting PipelineRuns", zap.String("namespace", namespace), zap.Error(err))
+	}
+	if err := cleanupTRs(ctx, namespace, updateTime); err != nil {
+		logger.Errorw("Error collecting TaskRuns", zap.String("namespace", namespace), zap.Error(err))
+	}
 }
 
 // CleanupPRs is responsible for cleaning up completed PipelineRuns based on their TTL and history limit.
