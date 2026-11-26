@@ -41,7 +41,35 @@ func NewController(ctx context.Context, cmw configmap.Watcher) *controller.Impl 
 				return false
 			}
 			// Only react to ConfigMaps with the namespace-level pruner config name
-			return cm.Name == config.PrunerNamespaceConfigMapName
+			// AND the required labels to prevent unlabeled ConfigMaps from bypassing webhook validation
+			if cm.Name != config.PrunerNamespaceConfigMapName {
+				return false
+			}
+
+			// Verify required labels are present to match webhook objectSelector
+			// This prevents unlabeled ConfigMaps from bypassing validation
+			if cm.Labels == nil {
+				logger.Warnw("Ignoring unlabeled ConfigMap with pruner name (missing required labels)",
+					"name", cm.Name, "namespace", cm.Namespace)
+				return false
+			}
+
+			partOf, hasPartOf := cm.Labels[config.LabelPartOf]
+			configType, hasConfigType := cm.Labels[config.LabelConfigType]
+
+			if !hasPartOf || partOf != config.LabelPartOfValue {
+				logger.Warnw("Ignoring ConfigMap missing app.kubernetes.io/part-of=tekton-pruner label",
+					"name", cm.Name, "namespace", cm.Namespace)
+				return false
+			}
+
+			if !hasConfigType || configType != config.LabelConfigTypeNamespace {
+				logger.Warnw("Ignoring ConfigMap with incorrect config-type label (expected 'namespace')",
+					"name", cm.Name, "namespace", cm.Namespace, "configType", configType)
+				return false
+			}
+
+			return true
 		},
 		Handler: cache.ResourceEventHandlerFuncs{
 			AddFunc:    func(obj interface{}) { impl.Enqueue(obj) },
