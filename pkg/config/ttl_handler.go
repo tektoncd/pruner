@@ -97,9 +97,14 @@ func (th *TTLHandler) ProcessEvent(ctx context.Context, resource metav1.Object) 
 	}
 
 	// update ttl annotation, if not present
-	err := th.updateAnnotationTTLSeconds(ctx, resource)
+	ttlRemoved, err := th.updateAnnotationTTLSeconds(ctx, resource)
 	if err != nil {
 		return err
+	}
+
+	// the TTL config is gone, so the annotation on the cached object is stale
+	if ttlRemoved {
+		return nil
 	}
 
 	// if the resource is not available for cleanup, no further action needed
@@ -110,8 +115,10 @@ func (th *TTLHandler) ProcessEvent(ctx context.Context, resource metav1.Object) 
 	return th.removeResource(ctx, resource)
 }
 
-// updateAnnotationTTLSeconds updates the TTL annotation of a resource if needed
-func (th *TTLHandler) updateAnnotationTTLSeconds(ctx context.Context, resource metav1.Object) error {
+// updateAnnotationTTLSeconds updates the TTL annotation of a resource if needed.
+// It reports whether an existing TTL annotation was removed because no TTL is
+// configured for the resource anymore.
+func (th *TTLHandler) updateAnnotationTTLSeconds(ctx context.Context, resource metav1.Object) (bool, error) {
 	logger := logging.FromContext(ctx)
 
 	// get resource name and selectors first to avoid redundant work if no update needed
@@ -129,7 +136,7 @@ func (th *TTLHandler) updateAnnotationTTLSeconds(ctx context.Context, resource m
 
 	// Check if update is needed
 	if !th.needsTTLUpdate(resource, enforcedLevel) {
-		return nil
+		return false, nil
 	}
 
 	// Get TTL value
@@ -145,32 +152,33 @@ func (th *TTLHandler) updateAnnotationTTLSeconds(ctx context.Context, resource m
 	resourceLatest, err := th.resourceFn.Get(ctx, resource.GetNamespace(), resource.GetName())
 	if err != nil {
 		if errors.IsNotFound(err) {
-			return nil
+			return false, nil
 		}
-		return fmt.Errorf("failed to get resource: %w", err)
+		return false, fmt.Errorf("failed to get resource: %w", err)
 	}
 
-	// Update annotations
+	// Only the TTL key goes into the patch. With a JSON merge patch a key that
+	// is left out is kept on the server, so a removal has to be sent as null.
 	annotations := resourceLatest.GetAnnotations()
-	if annotations == nil {
-		annotations = make(map[string]string)
-	}
+	var annotationValue interface{}
+	removed := false
 
 	if ttl == nil {
 		// If TTL is nil, remove the annotation if it exists
-		if _, exists := annotations[AnnotationTTLSecondsAfterFinished]; exists {
-			delete(annotations, AnnotationTTLSecondsAfterFinished)
-			logger.Debugw("removing TTL annotation - no TTL configuration found",
-				"resource", th.resourceFn.Type(),
-				"namespace", resource.GetNamespace(),
-				"name", resource.GetName())
+		if _, exists := annotations[AnnotationTTLSecondsAfterFinished]; !exists {
+			return false, nil
 		}
+		removed = true
+		logger.Debugw("removing TTL annotation - no TTL configuration found",
+			"resource", th.resourceFn.Type(),
+			"namespace", resource.GetNamespace(),
+			"name", resource.GetName())
 	} else {
 		// Set new TTL annotation
 		newTTL := strconv.Itoa(int(*ttl))
 		currentTTL, hasCurrentTTL := annotations[AnnotationTTLSecondsAfterFinished]
 		if !hasCurrentTTL || currentTTL != newTTL {
-			annotations[AnnotationTTLSecondsAfterFinished] = newTTL
+			annotationValue = newTTL
 			logger.Debugw("updating TTL annotation",
 				"resource", th.resourceFn.Type(),
 				"namespace", resource.GetNamespace(),
@@ -179,26 +187,28 @@ func (th *TTLHandler) updateAnnotationTTLSeconds(ctx context.Context, resource m
 				"newTTL", newTTL,
 				"hadPreviousTTL", hasCurrentTTL)
 		} else {
-			return nil
+			return false, nil
 		}
 	}
 
 	patchData := map[string]interface{}{
 		"metadata": map[string]interface{}{
-			"annotations": annotations,
+			"annotations": map[string]interface{}{
+				AnnotationTTLSecondsAfterFinished: annotationValue,
+			},
 		},
 	}
 
 	patchBytes, err := json.Marshal(patchData)
 	if err != nil {
-		return fmt.Errorf("failed to marshal patch data: %w", err)
+		return false, fmt.Errorf("failed to marshal patch data: %w", err)
 	}
 
 	if err := th.resourceFn.Patch(ctx, resourceLatest.GetNamespace(), resourceLatest.GetName(), patchBytes); err != nil {
-		return fmt.Errorf("failed to patch resource with TTL annotation: %w", err)
+		return false, fmt.Errorf("failed to patch resource with TTL annotation: %w", err)
 	}
 
-	return nil
+	return removed, nil
 }
 
 // needsCleanup checks whether a Resource has finished and has a TTL set.
