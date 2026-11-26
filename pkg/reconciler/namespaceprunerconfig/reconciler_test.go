@@ -3,6 +3,7 @@ package namespaceprunerconfig
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/tektoncd/pruner/pkg/config"
 	corev1 "k8s.io/api/core/v1"
@@ -156,6 +157,109 @@ func TestParseKey(t *testing.T) {
 
 			if name != tt.wantName {
 				t.Errorf("name = %v, want %v", name, tt.wantName)
+			}
+		})
+	}
+}
+
+func TestReconcileTriggersCleanupOnConfigChange(t *testing.T) {
+	ctx := logging.WithLogger(context.Background(), logtesting.TestLogger(t))
+	testNamespace := "cleanup-namespace"
+	key := testNamespace + "/" + config.PrunerNamespaceConfigMapName
+	startTime := time.Now()
+
+	newConfigMap := func(created time.Time, resourceVersion, data string) *corev1.ConfigMap {
+		return &corev1.ConfigMap{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:              config.PrunerNamespaceConfigMapName,
+				Namespace:         testNamespace,
+				ResourceVersion:   resourceVersion,
+				CreationTimestamp: metav1.NewTime(created),
+			},
+			Data: map[string]string{config.PrunerNamespaceConfigKey: data},
+		}
+	}
+
+	tests := []struct {
+		name string
+		// steps are applied in order; nil deletes the ConfigMap
+		steps     []*corev1.ConfigMap
+		wantCalls int
+	}{
+		{
+			name:      "existing config at startup does not trigger",
+			steps:     []*corev1.ConfigMap{newConfigMap(startTime.Add(-time.Hour), "1", "successfulHistoryLimit: 5")},
+			wantCalls: 0,
+		},
+		{
+			name:      "config created after startup triggers",
+			steps:     []*corev1.ConfigMap{newConfigMap(startTime.Add(time.Minute), "1", "successfulHistoryLimit: 5")},
+			wantCalls: 1,
+		},
+		{
+			name: "updated config triggers",
+			steps: []*corev1.ConfigMap{
+				newConfigMap(startTime.Add(-time.Hour), "1", "successfulHistoryLimit: 5"),
+				newConfigMap(startTime.Add(-time.Hour), "2", "successfulHistoryLimit: 2"),
+			},
+			wantCalls: 1,
+		},
+		{
+			name: "resync without changes does not trigger",
+			steps: []*corev1.ConfigMap{
+				newConfigMap(startTime.Add(-time.Hour), "1", "successfulHistoryLimit: 5"),
+				newConfigMap(startTime.Add(-time.Hour), "1", "successfulHistoryLimit: 5"),
+			},
+			wantCalls: 0,
+		},
+		{
+			name: "deleted config triggers",
+			steps: []*corev1.ConfigMap{
+				newConfigMap(startTime.Add(-time.Hour), "1", "successfulHistoryLimit: 5"),
+				nil,
+			},
+			wantCalls: 1,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			defer config.PrunerConfigStore.DeleteNamespaceConfig(ctx, testNamespace)
+
+			kubeClient := fake.NewSimpleClientset()
+			var calls []string
+			reconciler := &Reconciler{
+				kubeclient:     kubeClient,
+				startTime:      startTime,
+				onConfigChange: func(namespace string) { calls = append(calls, namespace) },
+			}
+
+			for _, cm := range tt.steps {
+				cms := kubeClient.CoreV1().ConfigMaps(testNamespace)
+				if cm == nil {
+					if err := cms.Delete(ctx, config.PrunerNamespaceConfigMapName, metav1.DeleteOptions{}); err != nil {
+						t.Fatalf("Failed to delete ConfigMap: %v", err)
+					}
+				} else if _, err := cms.Get(ctx, cm.Name, metav1.GetOptions{}); err != nil {
+					if _, err := cms.Create(ctx, cm, metav1.CreateOptions{}); err != nil {
+						t.Fatalf("Failed to create ConfigMap: %v", err)
+					}
+				} else if _, err := cms.Update(ctx, cm, metav1.UpdateOptions{}); err != nil {
+					t.Fatalf("Failed to update ConfigMap: %v", err)
+				}
+
+				if err := reconciler.Reconcile(ctx, key); err != nil {
+					t.Fatalf("Reconcile() returned error: %v", err)
+				}
+			}
+
+			if len(calls) != tt.wantCalls {
+				t.Fatalf("cleanup triggered %d times, want %d", len(calls), tt.wantCalls)
+			}
+			for _, ns := range calls {
+				if ns != testNamespace {
+					t.Errorf("cleanup triggered for namespace %q, want %q", ns, testNamespace)
+				}
 			}
 		})
 	}
